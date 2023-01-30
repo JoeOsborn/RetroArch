@@ -6,8 +6,30 @@
 const core = "fceumm";
 const content_folder = "/content/";
 const content = "bfight.nes";
-const entrySlot = 0;
+const entryState = false;
+const movie = false;
+
+console.assert(!(entryState && movie), "It is invalid to have both an entry state and play back a movie");
+
+var movieArg = "-R";
+if (movie) {
+    movieArg = "-P";
+}
 var contentBase = content.substr(0,content.lastIndexOf("."));
+
+var retro_args =  ["-v"];
+if (entryState) {
+    retro_args.push("-e");
+    retro_args.push("1");
+}
+if (movie) {
+    retro_args.push("-P");
+    retro_args.push("/home/web_user/content/movie.bsv");
+} else {
+    retro_args.push("-R");
+    retro_args.push("/home/web_user/userdata/movie.bsv");
+}
+retro_args.push("/home/web_user/content/"+content);
 
 var BrowserFS = BrowserFS;
 var afs;
@@ -62,8 +84,11 @@ function setupFileSystem(backend)
     // ([], "assets/cores/");
     var xfs_content_files = {"retroarch.cfg":null};
     xfs_content_files[content] = null;
-    if (entrySlot != 0) {
+    if (entryState) {
         xfs_content_files["entry_state"] = null;
+    }
+    if (movie) {
+        xfs_content_files["movie.bsv"] = null;
     }
     var xfs_content = new BrowserFS.FileSystem.XmlHttpRequest(xfs_content_files, content_folder);
 
@@ -77,7 +102,7 @@ function setupFileSystem(backend)
     var BFS = new BrowserFS.EmscriptenFS();
     FS.mount(BFS, {root: '/home'}, '/home');
 
-    if (entrySlot != 0) {
+    if (entryState) {
         FS.mkdir("/home/web_user/retroarch/userdata/states");
         copyFile("/home/web_user/content/entry_state",
                  "/home/web_user/retroarch/userdata/states/"+contentBase+".state1.entry");
@@ -148,7 +173,7 @@ function uploadData(data,name)
 var Module =
 {
   noInitialRun: true,
-    arguments: ["-v", "-R", "/home/web_user/retroarch/userdata/movie.bsv", "-e", entrySlot.toString(), "/home/web_user/content/"+content],
+    arguments: retro_args,
   preRun: [],
   postRun: [],
   onRuntimeInitialized: function()
