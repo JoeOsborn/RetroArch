@@ -341,6 +341,7 @@ static bool filesystem_ready = false;
 void PlatformEmscriptenMountFilesystems(void *info) {
    char *opfs_mount = getenv("OPFS");
    char *fetch_manifest = getenv("FETCH_MANIFEST");
+   char *fetch_base_dir = getenv("FETCH_BASE_DIR");
    if(opfs_mount) {
       int res;
       printf("[OPFS] Mount OPFS at %s\n", opfs_mount);
@@ -364,10 +365,11 @@ void PlatformEmscriptenMountFilesystems(void *info) {
          abort();
       }
    }
-   if(fetch_manifest) {
+   if(fetch_manifest || fetch_base_dir) {
       /* fetch_manifest should be a path to a manifest file.
          manifest files have this format:
 
+         BASEURL
          URL PATH
          URL PATH
          URL PATH
@@ -376,6 +378,9 @@ void PlatformEmscriptenMountFilesystems(void *info) {
          Where URL may not contain spaces, but PATH may.
        */
       int max_line_len = 1024;
+      if(!(fetch_manifest && fetch_base_dir)) {
+         printf("[FetchFS] must specify both FETCH_MANIFEST and FETCH_BASE_DIR\n");
+      }
       printf("[FetchFS] read fetch manifest from %s\n",fetch_manifest);
       FILE *file = fopen(fetch_manifest, "r");
       if(!file) {
@@ -384,42 +389,61 @@ void PlatformEmscriptenMountFilesystems(void *info) {
       }
       char *line = calloc(sizeof(char), max_line_len);
       size_t len = max_line_len;
+      if (getline(&line, &len, file) == -1 || len == 0) {
+         printf("[FetchFS] missing base URL\n");
+         abort();
+      }
+      char *base_url = strdup(line);
+      backend_t fetch = wasmfs_create_fetch_backend(base_url, 16*1024*1024);
+      wasmfs_create_directory(fetch_base_dir, 0777, fetch);
       while (getline(&line, &len, file) != -1) {
-         char *path = strstr(line, " ");
-         backend_t fetch;
+         char *realfs_path = strstr(line, " "), *url = line;
          int fd;
-         if(len <= 2 || !path) {
+         if(len <= 2 || !realfs_path) {
             printf("[FetchFS] Manifest file has invalid line %s\n",line);
             continue;
          }
-         *path = '\0';
-         path += 1;
-         path[strcspn(path, "\r\n")] = '\0';
-         printf("[FetchFS] Fetch %s from %s\n", path, line);
+         *realfs_path = '\0';
+         realfs_path += 1;
+         realfs_path[strcspn(realfs_path, "\r\n")] = '\0';
+         printf("[FetchFS] Fetch %s from URL %s / %s, fetched path %s / %s\n", realfs_path, base_url, url, fetch_base_dir, url);
+         char fetchfs_path[PATH_MAX];
+         fill_pathname_join(fetchfs_path, fetch_base_dir, url, sizeof(fetchfs_path));
+         /* Make the directories for link path */
          {
-            char *parent = strdup(path);
+            char *parent = strdup(realfs_path);
             path_parent_dir(parent, strlen(parent));
             if(!path_mkdir(parent)) {
-               printf("[FetchFS] mkdir error %d\n",errno);
+               printf("[FetchFS] mkdir error %s %d\n", realfs_path, errno);
                abort();
             }
             free(parent);
          }
-         fetch = wasmfs_create_fetch_backend(line, 16*1024*1024);
-         if(!fetch) {
-           printf("[FetchFS] couldn't create fetch backend\n");
-           abort();
+         /* Make the directories for URL path */
+         {
+            char *parent = strdup(fetchfs_path);
+            path_parent_dir(parent, strlen(parent));
+            if(!path_mkdir(parent)) {
+               printf("[FetchFS] mkdir error %s %d\n", fetchfs_path, errno);
+               abort();
+            }
+            free(parent);
          }
-         fd = wasmfs_create_file(path, 0777, fetch);
+         fd = open(fetchfs_path, O_CREAT);
          if(!fd) {
-           printf("[FetchFS] couldn't create fetch file\n");
+           printf("[FetchFS] couldn't create fetch file %s\n", fetchfs_path);
            abort();
          }
          close(fd);
+         if(symlink(fetchfs_path, realfs_path) != 0) {
+            printf("[FetchFS] couldn't create link %s to fetch file %s (errno %d)\n", realfs_path, fetchfs_path, errno);
+           abort();
+         }
          len = max_line_len;
       }
       fclose(file);
       free(line);
+      free(base_url);
    }
    filesystem_ready = true;
 #if !PROXY_TO_PTHREAD
