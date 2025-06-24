@@ -53,6 +53,7 @@ void bsv_movie_frame_rewind()
       /* If we're at the beginning... */
       handle->frame_counter = 0;
       intfstream_seek(handle->file, (int)handle->min_file_pos, SEEK_SET);
+      // TODO: clear or reset incremental checkpoint table data
       if (recording)
          intfstream_truncate(handle->file, (int)handle->min_file_pos);
       else
@@ -72,6 +73,7 @@ void bsv_movie_frame_rewind()
       else
          handle->frame_counter = 0;
       intfstream_seek(handle->file, (int)handle->frame_pos[handle->frame_counter & handle->frame_mask], SEEK_SET);
+      // TODO: update incremental checkpoint table data by dropping data from later frames
       if (recording)
          intfstream_truncate(handle->file, (int)handle->frame_pos[handle->frame_counter & handle->frame_mask]);
       else
@@ -81,6 +83,7 @@ void bsv_movie_frame_rewind()
    if (intfstream_tell(handle->file) <= (long)handle->min_file_pos)
    {
       /* We rewound past the beginning. */
+      // TODO: clear or reset incremental checkpoint table data
 
       if (handle->playback)
       {
@@ -319,7 +322,7 @@ void bsv_movie_next_frame(input_driver_state_t *input_st)
          serial_info.data  = st;
          serial_info.size  = _len;
          core_serialize(&serial_info);
-         // incremental encode
+         // TODO incremental encode
          /* "next frame is a checkpoint" */
          intfstream_write(handle->file, (uint8_t *)(&frame_tok), sizeof(uint8_t));
          intfstream_write(handle->file, &size, sizeof(uint64_t));
@@ -418,10 +421,9 @@ bool replay_set_serialized_data(void* buf)
       if (ident == input_st->bsv_movie_state_handle->identifier) /* is compatible? */
       {
          int32_t loaded_len    = swap_if_big32(((int32_t *)buffer)[0]);
-         int64_t handle_idx    = intfstream_tell(
-               input_st->bsv_movie_state_handle->file);
+         int64_t handle_idx    = intfstream_tell(input_st->bsv_movie_state_handle->file);
          /* If the state is part of this replay, go back to that state
-            and rewind/fast forward the replay.
+            and fast forward/rewind the replay.
 
             If the savestate movie is after the current replay
             length we can replace the current replay data with it,
@@ -429,7 +431,7 @@ bool replay_set_serialized_data(void* buf)
             savestate movie time point.
 
             This can truncate the current replay if we're in recording mode.
-         */
+          */
          if (loaded_len > handle_idx)
          {
             /* TODO: Really, to be very careful, we should be
@@ -437,10 +439,19 @@ bool replay_set_serialized_data(void* buf)
                same up to handle_idx. Right? */
             intfstream_rewind(input_st->bsv_movie_state_handle->file);
             intfstream_write(input_st->bsv_movie_state_handle->file, buffer+sizeof(int32_t), loaded_len);
+            // TODO: update the checkpoint reference data in the movie structure since we have traveled forward in time
+            // TODO: also update or clear frame_pos, frame_counter--rewind won't work properly unless we do.
+            // EITHER of those will require a walk through the movie from 0 up to loaded_len, updating the ring buffer and frame counter *and* the state reference data.
+            // SHOULD each frame include its counter and the backwards offset of the previous frame?
+            // That adds 4 + 4 bytes to each frame, about the size of a controller input.
+            // Backwards scanning would still be necessary, but for very long replays (over four hours) this would be better.
          }
          else
          {
             intfstream_seek(input_st->bsv_movie_state_handle->file, loaded_len, SEEK_SET);
+            // TODO: update the checkpoint reference data in the movie structure since we have traveled backward in time
+            // TODO: also update or clear frame_pos, frame_counter--rewind won't work properly unless we do
+            // EITHER of those will require a walk through the movie from 0 up to loaded_len, updating the ring buffer and frame counter *and* the state reference data.
             if (recording)
                intfstream_truncate(input_st->bsv_movie_state_handle->file, loaded_len);
          }
