@@ -31,6 +31,10 @@
 #include "input_osk.h"
 #include "input_types.h"
 
+#ifdef HAVE_BSV_MOVIE
+#include "bsv/bsvmovie.h"
+#endif
+
 #ifdef HAVE_CHEEVOS
 #include "../cheevos/cheevos.h"
 #endif
@@ -55,9 +59,6 @@
 #include "../paths.h"
 #include "../performance_counters.h"
 #include "../retroarch.h"
-#ifdef HAVE_BSV_MOVIE
-#include "../tasks/task_content.h"
-#endif
 #include "../tasks/tasks_internal.h"
 #include "../verbosity.h"
 
@@ -5897,469 +5898,6 @@ static void input_keys_pressed(
    }
 }
 
-#ifdef HAVE_BSV_MOVIE
-/* Forward declaration */
-void bsv_movie_free(bsv_movie_t*);
-
-void bsv_movie_enqueue(input_driver_state_t *input_st,
-      bsv_movie_t * state, enum bsv_flags flags)
-{
-   if (input_st->bsv_movie_state_next_handle)
-      bsv_movie_free(input_st->bsv_movie_state_next_handle);
-   input_st->bsv_movie_state_next_handle    = state;
-   input_st->bsv_movie_state.flags          = flags;
-}
-
-void bsv_movie_deinit(input_driver_state_t *input_st)
-{
-   if (input_st->bsv_movie_state_handle)
-      bsv_movie_free(input_st->bsv_movie_state_handle);
-   input_st->bsv_movie_state_handle = NULL;
-}
-
-void bsv_movie_deinit_full(input_driver_state_t *input_st)
-{
-   bsv_movie_deinit(input_st);
-   if (input_st->bsv_movie_state_next_handle)
-      bsv_movie_free(input_st->bsv_movie_state_next_handle);
-   input_st->bsv_movie_state_next_handle = NULL;
-}
-
-void bsv_movie_frame_rewind(void)
-{
-   input_driver_state_t *input_st = &input_driver_st;
-   bsv_movie_t         *handle    = input_st->bsv_movie_state_handle;
-   bool recording = (input_st->bsv_movie_state.flags
-         & BSV_FLAG_MOVIE_RECORDING) ? true : false;
-
-   if (!handle)
-      return;
-
-   handle->did_rewind = true;
-
-   if (     ( (handle->frame_counter & handle->frame_mask) <= 1)
-         && (handle->frame_pos[0] == handle->min_file_pos))
-   {
-      /* If we're at the beginning... */
-      handle->frame_counter = 0;
-      intfstream_seek(handle->file, (int)handle->min_file_pos, SEEK_SET);
-      if (recording)
-         intfstream_truncate(handle->file, (int)handle->min_file_pos);
-      else
-         bsv_movie_read_next_events(handle);
-   }
-   else
-   {
-      /* First time rewind is performed, the old frame is simply replayed.
-       * However, playing back that frame caused us to read data, and push
-       * data to the ring buffer.
-       *
-       * Successively rewinding frames, we need to rewind past the read data,
-       * plus another. */
-      uint8_t delta = handle->first_rewind ? 1 : 2;
-      if (handle->frame_counter >= delta)
-         handle->frame_counter -= delta;
-      else
-         handle->frame_counter = 0;
-      intfstream_seek(handle->file, (int)handle->frame_pos[handle->frame_counter & handle->frame_mask], SEEK_SET);
-      if (recording)
-         intfstream_truncate(handle->file, (int)handle->frame_pos[handle->frame_counter & handle->frame_mask]);
-      else
-         bsv_movie_read_next_events(handle);
-   }
-
-   if (intfstream_tell(handle->file) <= (long)handle->min_file_pos)
-   {
-      /* We rewound past the beginning. */
-
-      if (handle->playback)
-      {
-         intfstream_seek(handle->file, (int)handle->min_file_pos, SEEK_SET);
-         bsv_movie_read_next_events(handle);
-      }
-      else
-      {
-         retro_ctx_serialize_info_t serial_info;
-
-         /* If recording, we simply reset
-          * the starting point. Nice and easy. */
-
-         intfstream_seek(handle->file, 4 * sizeof(uint32_t), SEEK_SET);
-         intfstream_truncate(handle->file, 4 * sizeof(uint32_t));
-
-         serial_info.data = handle->state;
-         serial_info.size = handle->state_size;
-
-         core_serialize(&serial_info);
-
-         intfstream_write(handle->file, handle->state, handle->state_size);
-      }
-   }
-}
-
-void bsv_movie_handle_push_key_event(bsv_movie_t *movie,
-      uint8_t down, uint16_t mod, uint32_t code, uint32_t character)
-{
-   bsv_key_data_t data;
-   data.down                                 = down;
-   data._padding                             = 0;
-   data.mod                                  = swap_if_big16(mod);
-   data.code                                 = swap_if_big32(code);
-   data.character                            = swap_if_big32(character);
-   movie->key_events[movie->key_event_count] = data;
-   movie->key_event_count++;
-}
-
-void bsv_movie_handle_push_input_event(bsv_movie_t *movie,
-     uint8_t port, uint8_t dev, uint8_t idx, uint16_t id, int16_t val)
-{
-   bsv_input_data_t data;
-   data.port                          = port;
-   data.device                        = dev;
-   data.idx                           = idx;
-   data._padding                      = 0;
-   data.id                            = swap_if_big16(id);
-   data.value                         = swap_if_big16(val);
-   movie->input_events[movie->input_event_count] = data;
-   movie->input_event_count++;
-}
-
-bool bsv_movie_handle_read_input_event(bsv_movie_t *movie,
-     uint8_t port, uint8_t dev, uint8_t idx, uint16_t id, int16_t* val)
-{
-   int i;
-   /* if movie is old, just read two bytes and hope for the best */
-   if (movie->version == 0)
-   {
-      int64_t read = intfstream_read(movie->file, val, 2);
-      *val         = swap_if_big16(*val);
-      return (read == 2);
-   }
-   for (i = 0; i < movie->input_event_count; i++)
-   {
-      bsv_input_data_t evt = movie->input_events[i];
-      if (   (evt.port   == port)
-          && (evt.device == dev)
-          && (evt.idx    == idx)
-          && (evt.id     == id))
-      {
-         *val = swap_if_big16(evt.value);
-         return true;
-      }
-   }
-   return false;
-}
-
-void bsv_movie_finish_rewind(input_driver_state_t *input_st)
-{
-   bsv_movie_t *handle    = input_st->bsv_movie_state_handle;
-   if (!handle)
-      return;
-   handle->frame_counter += 1;
-   handle->first_rewind   = !handle->did_rewind;
-   handle->did_rewind     = false;
-}
-
-void bsv_movie_read_next_events(bsv_movie_t *handle)
-{
-   input_driver_state_t *input_st = input_state_get_ptr();
-   if (intfstream_read(handle->file, &(handle->key_event_count), 1) == 1)
-   {
-      int i;
-      for (i = 0; i < handle->key_event_count; i++)
-      {
-         if (intfstream_read(handle->file, &(handle->key_events[i]),
-                  sizeof(bsv_key_data_t)) != sizeof(bsv_key_data_t))
-         {
-            /* Unnatural EOF */
-            RARCH_ERR("[Replay] Keyboard replay ran out of keyboard inputs too early\n");
-            input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-            return;
-         }
-      }
-   }
-   else
-   {
-      RARCH_LOG("[Replay] EOF after buttons\n");
-      /* Natural(?) EOF */
-      input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-      return;
-   }
-   if (handle->version > 0)
-   {
-      if (intfstream_read(handle->file, &(handle->input_event_count), 2) == 2)
-      {
-         int i;
-         handle->input_event_count = swap_if_big16(handle->input_event_count);
-         for (i = 0; i < handle->input_event_count; i++)
-         {
-            if (intfstream_read(handle->file, &(handle->input_events[i]),
-                     sizeof(bsv_input_data_t)) != sizeof(bsv_input_data_t))
-            {
-               /* Unnatural EOF */
-               RARCH_ERR("[Replay] Input replay ran out of inputs too early\n");
-               input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-               return;
-            }
-         }
-      }
-      else
-      {
-         RARCH_LOG("[Replay] EOF after inputs\n");
-         /* Natural(?) EOF */
-         input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-         return;
-      }
-   }
-
-   {
-      uint8_t next_frame_type=REPLAY_TOKEN_INVALID;
-      if (intfstream_read(handle->file, (uint8_t *)(&next_frame_type),
-               sizeof(uint8_t)) != sizeof(uint8_t))
-      {
-         /* Unnatural EOF */
-         RARCH_ERR("[Replay] Replay ran out of frames\n");
-         input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-         return;
-      }
-      else if (next_frame_type == REPLAY_TOKEN_CHECKPOINT_FRAME)
-      {
-         uint64_t size;
-         uint8_t *st;
-         retro_ctx_serialize_info_t serial_info;
-
-         if (intfstream_read(handle->file, &(size),
-             sizeof(uint64_t)) != sizeof(uint64_t))
-         {
-            RARCH_ERR("[Replay] Replay ran out of frames\n");
-            input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-            return;
-         }
-
-         size = swap_if_big64(size);
-         st   = (uint8_t*)malloc(size);
-         if (intfstream_read(handle->file, st, size) != (int64_t)size)
-         {
-            RARCH_ERR("[Replay] Replay checkpoint truncated\n");
-            input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-            free(st);
-            return;
-         }
-
-         serial_info.data_const = st;
-         serial_info.size       = size;
-         core_unserialize(&serial_info);
-         free(st);
-      }
-   }
-}
-
-void bsv_movie_next_frame(input_driver_state_t *input_st)
-{
-   unsigned checkpoint_interval   = config_get_ptr()->uints.replay_checkpoint_interval;
-   /* if bsv_movie_state_next_handle is not null, deinit and set
-      bsv_movie_state_handle to bsv_movie_state_next_handle and clear
-      next_handle */
-   bsv_movie_t         *handle    = input_st->bsv_movie_state_handle;
-   if (input_st->bsv_movie_state_next_handle)
-   {
-      if (handle)
-         bsv_movie_deinit(input_st);
-      handle = input_st->bsv_movie_state_next_handle;
-      input_st->bsv_movie_state_handle = handle;
-      input_st->bsv_movie_state_next_handle = NULL;
-   }
-
-   if (!handle)
-      return;
-#ifdef HAVE_REWIND
-   if (state_manager_frame_is_reversed())
-      return;
-#endif
-
-   if (input_st->bsv_movie_state.flags & BSV_FLAG_MOVIE_RECORDING)
-   {
-      int i;
-      uint16_t evt_count = swap_if_big16(handle->input_event_count);
-      /* write key events, frame is over */
-      intfstream_write(handle->file, &(handle->key_event_count), 1);
-      for (i = 0; i < handle->key_event_count; i++)
-         intfstream_write(handle->file, &(handle->key_events[i]),
-               sizeof(bsv_key_data_t));
-      /* Zero out key events when playing back or recording */
-      handle->key_event_count = 0;
-      /* write input events, frame is over */
-      intfstream_write(handle->file, &evt_count, 2);
-      for (i = 0; i < handle->input_event_count; i++)
-         intfstream_write(handle->file, &(handle->input_events[i]),
-               sizeof(bsv_input_data_t));
-      /* Zero out input events when playing back or recording */
-      handle->input_event_count = 0;
-
-      /* Maybe record checkpoint */
-      if (     (checkpoint_interval != 0)
-            && (handle->frame_counter > 0)
-            && (handle->frame_counter % (checkpoint_interval*60) == 0))
-      {
-         retro_ctx_serialize_info_t serial_info;
-         uint8_t frame_tok = REPLAY_TOKEN_CHECKPOINT_FRAME;
-         size_t _len       = core_serialize_size();
-         uint64_t size     = swap_if_big64(_len);
-         uint8_t *st       = (uint8_t*)malloc(_len);
-         serial_info.data  = st;
-         serial_info.size  = _len;
-         core_serialize(&serial_info);
-         /* "next frame is a checkpoint" */
-         intfstream_write(handle->file, (uint8_t *)(&frame_tok), sizeof(uint8_t));
-         intfstream_write(handle->file, &size, sizeof(uint64_t));
-         intfstream_write(handle->file, st, _len);
-         free(st);
-      }
-      else
-      {
-         uint8_t frame_tok = REPLAY_TOKEN_REGULAR_FRAME;
-         /* write "next frame is not a checkpoint" */
-         intfstream_write(handle->file, (uint8_t *)(&frame_tok), sizeof(uint8_t));
-      }
-   }
-
-   if (input_st->bsv_movie_state.flags & BSV_FLAG_MOVIE_PLAYBACK)
-      bsv_movie_read_next_events(handle);
-   handle->frame_pos[handle->frame_counter & handle->frame_mask] = intfstream_tell(handle->file);
-}
-
-size_t replay_get_serialize_size(void)
-{
-   input_driver_state_t *input_st = &input_driver_st;
-   if (input_st->bsv_movie_state.flags & (BSV_FLAG_MOVIE_RECORDING | BSV_FLAG_MOVIE_PLAYBACK))
-      return sizeof(int32_t)+intfstream_tell(input_st->bsv_movie_state_handle->file);
-   return 0;
-}
-
-bool replay_get_serialized_data(void* buffer)
-{
-   input_driver_state_t *input_st = &input_driver_st;
-   bsv_movie_t *handle            = input_st->bsv_movie_state_handle;
-
-   if (input_st->bsv_movie_state.flags & (BSV_FLAG_MOVIE_RECORDING | BSV_FLAG_MOVIE_PLAYBACK))
-   {
-      int64_t file_end        = intfstream_tell(handle->file);
-      int64_t read_amt        = 0;
-      long file_end_lil       = swap_if_big32(file_end);
-      uint8_t *file_end_bytes = (uint8_t *)(&file_end_lil);
-      uint8_t *buf            = buffer;
-      buf[0]                  = file_end_bytes[0];
-      buf[1]                  = file_end_bytes[1];
-      buf[2]                  = file_end_bytes[2];
-      buf[3]                  = file_end_bytes[3];
-      buf                    += 4;
-      intfstream_rewind(handle->file);
-      read_amt                = intfstream_read(handle->file, (void *)buf, file_end);
-      if (read_amt != file_end)
-         RARCH_ERR("[Replay] Failed to write correct number of replay bytes into state file: %d / %d\n",
-               read_amt, file_end);
-   }
-   return true;
-}
-
-bool replay_set_serialized_data(void* buf)
-{
-   uint8_t *buffer                = buf;
-   input_driver_state_t *input_st = &input_driver_st;
-   bool playback                  = (input_st->bsv_movie_state.flags & BSV_FLAG_MOVIE_PLAYBACK)  ? true : false;
-   bool recording                 = (input_st->bsv_movie_state.flags & BSV_FLAG_MOVIE_RECORDING) ? true : false;
-
-   /* If there is no current replay, ignore this entirely.
-      TODO/FIXME: Later, consider loading up the replay
-      and allow the user to continue it?
-      Or would that be better done from the replay hotkeys?
-    */
-   if (!(playback || recording))
-      return true;
-
-   if (!buffer)
-   {
-      if (recording)
-      {
-         const char *_msg = msg_hash_to_str(MSG_REPLAY_LOAD_STATE_FAILED_INCOMPAT);
-         runloop_msg_queue_push(_msg, strlen(_msg), 1, 180, true, NULL,
-               MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
-         RARCH_ERR("[Replay] %s.\n", _msg);
-         return false;
-      }
-
-      if (playback)
-      {
-         const char *_msg = msg_hash_to_str(MSG_REPLAY_LOAD_STATE_HALT_INCOMPAT);
-         runloop_msg_queue_push(_msg, sizeof(_msg), 1, 180, true, NULL,
-               MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_WARNING);
-         RARCH_WARN("[Replay] %s.\n", _msg);
-         movie_stop(input_st);
-      }
-   }
-   else
-   {
-      /* TODO: should factor the next few lines away, magic numbers ahoy */
-      uint32_t *header         = (uint32_t *)(buffer + sizeof(int32_t));
-      int64_t *ident_spot      = (int64_t *)(header + 4);
-      int64_t ident            = swap_if_big64(*ident_spot);
-
-      if (ident == input_st->bsv_movie_state_handle->identifier) /* is compatible? */
-      {
-         int32_t loaded_len    = swap_if_big32(((int32_t *)buffer)[0]);
-         int64_t handle_idx    = intfstream_tell(
-               input_st->bsv_movie_state_handle->file);
-         /* If the state is part of this replay, go back to that state
-            and rewind/fast forward the replay.
-
-            If the savestate movie is after the current replay
-            length we can replace the current replay data with it,
-            but if it's earlier we can rewind the replay to the
-            savestate movie time point.
-
-            This can truncate the current replay if we're in recording mode.
-         */
-         if (loaded_len > handle_idx)
-         {
-            /* TODO: Really, to be very careful, we should be
-               checking that the events in the loaded state are the
-               same up to handle_idx. Right? */
-            intfstream_rewind(input_st->bsv_movie_state_handle->file);
-            intfstream_write(input_st->bsv_movie_state_handle->file, buffer+sizeof(int32_t), loaded_len);
-         }
-         else
-         {
-            intfstream_seek(input_st->bsv_movie_state_handle->file, loaded_len, SEEK_SET);
-            if (recording)
-               intfstream_truncate(input_st->bsv_movie_state_handle->file, loaded_len);
-         }
-      }
-      else
-      {
-         /* otherwise, if recording do not allow the load */
-         if (recording)
-         {
-            const char *_msg = msg_hash_to_str(MSG_REPLAY_LOAD_STATE_FAILED_INCOMPAT);
-            runloop_msg_queue_push(_msg, strlen(_msg), 1, 180, true, NULL,
-                  MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
-            RARCH_ERR("[Replay] %s.\n", _msg);
-            return false;
-         }
-         /* if in playback, halt playback and go to that state normally */
-         if (playback)
-         {
-            const char *_msg = msg_hash_to_str(MSG_REPLAY_LOAD_STATE_HALT_INCOMPAT);
-            runloop_msg_queue_push(_msg, strlen(_msg), 1, 180, true, NULL,
-                  MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_WARNING);
-            RARCH_WARN("[Replay] %s.\n", _msg);
-            movie_stop(input_st);
-         }
-      }
-   }
-   return true;
-}
-#endif
-
 void input_driver_poll(void)
 {
    size_t i, j;
@@ -6812,29 +6350,7 @@ void input_driver_poll(void)
 #endif
 #ifdef HAVE_BSV_MOVIE
    if (BSV_MOVIE_IS_PLAYBACK_ON())
-   {
-      runloop_state_t *runloop_st   = runloop_state_get_ptr();
-      retro_keyboard_event_t *key_event                 = &runloop_st->key_event;
-
-      if (*key_event && *key_event == runloop_st->frontend_key_event)
-      {
-         int i;
-         bsv_key_data_t k;
-         for (i = 0; i < input_st->bsv_movie_state_handle->key_event_count; i++)
-         {
-#ifdef HAVE_CHEEVOS
-            rcheevos_pause_hardcore();
-#endif
-            k = input_st->bsv_movie_state_handle->key_events[i];
-            input_keyboard_event(k.down, swap_if_big32(k.code),
-                  swap_if_big32(k.character), swap_if_big16(k.mod),
-                  RETRO_DEVICE_KEYBOARD);
-         }
-         /* Have to clear here so we don't double-apply key events */
-         /* Zero out key events when playing back or recording */
-         input_st->bsv_movie_state_handle->key_event_count = 0;
-      }
-   }
+      bsv_movie_poll(input_st);
 #endif
 }
 
@@ -6846,22 +6362,8 @@ int16_t input_driver_state_wrapper(unsigned port, unsigned device,
    settings_t *settings        = config_get_ptr();
    int16_t result              = 0;
 #ifdef HAVE_BSV_MOVIE
-   /* Load input from BSV record, if enabled */
    if (BSV_MOVIE_IS_PLAYBACK_ON())
-   {
-      int16_t bsv_result = 0;
-      bsv_movie_t *movie = input_st->bsv_movie_state_handle;
-      if (bsv_movie_handle_read_input_event(
-          movie, port, device, idx, id, &bsv_result))
-      {
-#ifdef HAVE_CHEEVOS
-         rcheevos_pause_hardcore();
-#endif
-         return bsv_result;
-      }
-
-      input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-   }
+     return bsv_movie_read_state(input_st, port, device, idx, id);
 #endif
 
    /* Read input state */
@@ -6875,9 +6377,8 @@ int16_t input_driver_state_wrapper(unsigned port, unsigned device,
       input_st->analog_requested[port] = true;
 
 #ifdef HAVE_BSV_MOVIE
-   /* Save input to BSV record, if enabled */
    if (BSV_MOVIE_IS_RECORDING())
-      bsv_movie_handle_push_input_event(
+      bsv_movie_push_input_event(
             input_st->bsv_movie_state_handle,
             port,
             device,
@@ -7698,9 +7199,8 @@ void input_keyboard_event(bool down, unsigned code,
          if (*key_event == runloop_st->frontend_key_event)
          {
 #ifdef HAVE_BSV_MOVIE
-            /* Save input to BSV record, if recording */
             if (BSV_MOVIE_IS_RECORDING())
-               bsv_movie_handle_push_key_event(
+               bsv_movie_push_key_event(
                      input_st->bsv_movie_state_handle, down, mod,
                      code, character);
 #endif

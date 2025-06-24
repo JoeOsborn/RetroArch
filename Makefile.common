@@ -451,6 +451,7 @@ endif
 
 ifeq ($(HAVE_BSV_MOVIE), 1)
    DEFINES += -DHAVE_BSV_MOVIE
+   OBJ += input/bsv/bsvmovie.o
 endif
 
 ifeq ($(HAVE_RUNAHEAD), 1)
