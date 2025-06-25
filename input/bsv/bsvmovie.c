@@ -57,7 +57,7 @@ void bsv_movie_frame_rewind()
       if (recording)
          intfstream_truncate(handle->file, (int)handle->min_file_pos);
       else
-         bsv_movie_read_next_events(handle);
+         bsv_movie_read_next_events(handle, false);
    }
    else
    {
@@ -77,7 +77,7 @@ void bsv_movie_frame_rewind()
       if (recording)
          intfstream_truncate(handle->file, (int)handle->frame_pos[handle->frame_counter & handle->frame_mask]);
       else
-         bsv_movie_read_next_events(handle);
+        bsv_movie_read_next_events(handle, false);
    }
 
    if (intfstream_tell(handle->file) <= (long)handle->min_file_pos)
@@ -88,7 +88,7 @@ void bsv_movie_frame_rewind()
       if (handle->playback)
       {
          intfstream_seek(handle->file, (int)handle->min_file_pos, SEEK_SET);
-         bsv_movie_read_next_events(handle);
+         bsv_movie_read_next_events(handle, false);
       }
       else
       {
@@ -173,7 +173,7 @@ void bsv_movie_finish_rewind(input_driver_state_t *input_st)
    handle->did_rewind     = false;
 }
 
-void bsv_movie_read_next_events(bsv_movie_t *handle)
+bool bsv_movie_read_next_events(bsv_movie_t *handle, bool skip_checkpoints)
 {
    input_driver_state_t *input_st = input_state_get_ptr();
    if (intfstream_read(handle->file, &(handle->key_event_count), 1) == 1)
@@ -187,7 +187,7 @@ void bsv_movie_read_next_events(bsv_movie_t *handle)
             /* Unnatural EOF */
             RARCH_ERR("[Replay] Keyboard replay ran out of keyboard inputs too early\n");
             input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-            return;
+            return false;
          }
       }
    }
@@ -196,7 +196,7 @@ void bsv_movie_read_next_events(bsv_movie_t *handle)
       RARCH_LOG("[Replay] EOF after buttons\n");
       /* Natural(?) EOF */
       input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-      return;
+      return false;
    }
    if (handle->version > 0)
    {
@@ -212,7 +212,7 @@ void bsv_movie_read_next_events(bsv_movie_t *handle)
                /* Unnatural EOF */
                RARCH_ERR("[Replay] Input replay ran out of inputs too early\n");
                input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-               return;
+               return false;
             }
          }
       }
@@ -221,7 +221,7 @@ void bsv_movie_read_next_events(bsv_movie_t *handle)
          RARCH_LOG("[Replay] EOF after inputs\n");
          /* Natural(?) EOF */
          input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-         return;
+         return false;
       }
    }
 
@@ -233,7 +233,7 @@ void bsv_movie_read_next_events(bsv_movie_t *handle)
          /* Unnatural EOF */
          RARCH_ERR("[Replay] Replay ran out of frames\n");
          input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-         return;
+         return false;
       }
       else if (next_frame_type == REPLAY_TOKEN_CHECKPOINT_FRAME)
       {
@@ -246,24 +246,49 @@ void bsv_movie_read_next_events(bsv_movie_t *handle)
          {
             RARCH_ERR("[Replay] Replay ran out of frames\n");
             input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-            return;
+            return false;
          }
 
          size = swap_if_big64(size);
-         st   = (uint8_t*)malloc(size);
-         if (intfstream_read(handle->file, st, size) != (int64_t)size)
+         if(skip_checkpoints)
          {
-            RARCH_ERR("[Replay] Replay checkpoint truncated\n");
-            input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
-            free(st);
-            return;
+            intfstream_seek(handle->file, size, SEEK_CUR);
          }
-         // incremental decode
-         serial_info.data_const = st;
-         serial_info.size       = size;
-         core_unserialize(&serial_info);
-         free(st);
+         else
+         {
+            st   = (uint8_t*)malloc(size);
+            if (intfstream_read(handle->file, st, size) != (int64_t)size)
+            {
+               RARCH_ERR("[Replay] Replay checkpoint truncated\n");
+               input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
+               free(st);
+               return false;
+            }
+            // incremental decode
+            serial_info.data_const = st;
+            serial_info.size       = size;
+            core_unserialize(&serial_info);
+            free(st);
+         }
       }
+   }
+   return true;
+}
+
+void bsv_movie_scan_from_start(input_driver_state_t *input_st, int32_t len)
+{
+   bsv_movie_t *movie = input_st->bsv_movie_state_handle;
+   if(movie->version == 0)
+     return; /* Old movies don't store enough information to fixup the frame counters. */
+   // TODO: update the checkpoint reference data in the movie structure since we have traveled forward in time
+   // if state_size, use the initial state to configure the data structures (maybe add a helper in task_movie.c:133, or have task_movie.c call something in here)
+   intfstream_seek(movie->file, movie->min_file_pos, SEEK_SET);
+   movie->frame_counter = 0;
+   movie->frame_pos[0] = intfstream_tell(movie->file);
+   while(intfstream_tell(movie->file) < len && bsv_movie_read_next_events(movie, true))
+   {
+      movie->frame_counter += 1;
+      movie->frame_pos[movie->frame_counter & movie->frame_mask] = intfstream_tell(movie->file);
    }
 }
 
@@ -338,7 +363,7 @@ void bsv_movie_next_frame(input_driver_state_t *input_st)
    }
 
    if (input_st->bsv_movie_state.flags & BSV_FLAG_MOVIE_PLAYBACK)
-      bsv_movie_read_next_events(handle);
+      bsv_movie_read_next_events(handle, false);
    handle->frame_pos[handle->frame_counter & handle->frame_mask] = intfstream_tell(handle->file);
 }
 
@@ -439,19 +464,14 @@ bool replay_set_serialized_data(void* buf)
                same up to handle_idx. Right? */
             intfstream_rewind(input_st->bsv_movie_state_handle->file);
             intfstream_write(input_st->bsv_movie_state_handle->file, buffer+sizeof(int32_t), loaded_len);
-            // TODO: update the checkpoint reference data in the movie structure since we have traveled forward in time
-            // TODO: also update or clear frame_pos, frame_counter--rewind won't work properly unless we do.
-            // EITHER of those will require a walk through the movie from 0 up to loaded_len, updating the ring buffer and frame counter *and* the state reference data.
-            // SHOULD each frame include its counter and the backwards offset of the previous frame?
-            // That adds 4 + 4 bytes to each frame, about the size of a controller input.
-            // Backwards scanning would still be necessary, but for very long replays (over four hours) this would be better.
+            /* also need to update/reinit frame_pos, frame_counter--rewind won't work properly unless we do. */
+            bsv_movie_scan_from_start(input_st, loaded_len);
          }
          else
          {
             intfstream_seek(input_st->bsv_movie_state_handle->file, loaded_len, SEEK_SET);
-            // TODO: update the checkpoint reference data in the movie structure since we have traveled backward in time
-            // TODO: also update or clear frame_pos, frame_counter--rewind won't work properly unless we do
-            // EITHER of those will require a walk through the movie from 0 up to loaded_len, updating the ring buffer and frame counter *and* the state reference data.
+            /* also need to update/reinit frame_pos, frame_counter--rewind won't work properly unless we do. */
+            bsv_movie_scan_from_start(input_st, loaded_len);
             if (recording)
                intfstream_truncate(input_st->bsv_movie_state_handle->file, loaded_len);
          }

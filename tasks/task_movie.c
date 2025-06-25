@@ -52,16 +52,19 @@
 #define IDENTIFIER_INDEX   4
 #define HEADER_LEN         6
 
-#define REPLAY_FORMAT_VERSION 1
+#define REPLAY_FORMAT_VERSION 2
 #define REPLAY_MAGIC       0x42535632
+
+/* Superblock and block sizes for incremental savestates. */
+#define DEFAULT_SUPERBLOCK_SIZE 256 /* measured in blocks */
+#define DEFAULT_BLOCK_SIZE      128 /* measured in bytes  */
 
 /* Forward declaration */
 bool content_load_state_in_progress(void* data);
 
 /* Private functions */
 
-static bool bsv_movie_init_playback(
-      bsv_movie_t *handle, const char *path)
+static bool bsv_movie_init_playback(bsv_movie_t *handle, const char *path)
 {
    int64_t *identifier_loc;
    uint32_t state_size         = 0;
@@ -107,7 +110,8 @@ static bool bsv_movie_init_playback(
    RARCH_ERR("----- debug %u -----\n", header[5]);
 #endif
 
-   if (state_size)
+   handle->min_file_pos = sizeof(header) + state_size;
+   if (state_size && vsn <= 1)
    {
       size_t info_size;
       retro_ctx_serialize_info_t serial_info;
@@ -131,15 +135,30 @@ static bool bsv_movie_init_playback(
       serial_info.size       = state_size;
       core_unserialize(&serial_info);
       if (info_size != state_size)
-      {
          RARCH_WARN("%s\n",
                msg_hash_to_str(MSG_MOVIE_FORMAT_DIFFERENT_SERIALIZER_VERSION));
-      }
+   }
+   else if (state_size && vsn >= 2)
+   {
+      uint16_t superblock_size = 0;
+      uint16_t block_size = 0;
+      if(intfstream_read(handle->file, &superblock_size, sizeof(uint16_t)) != sizeof(uint16_t))
+         return false;
+      if(intfstream_read(handle->file, &block_size, sizeof(uint16_t)) != sizeof(uint16_t))
+         return false;
+      handle->superblocks      = uint32s_index_new(superblock_size);
+      handle->blocks           = uint32s_index_new(block_size/4);
+      if(!bsv_movie_read_deduped_state(handle))
+         return false;
+   }
+   else if (vsn >= 2)
+   {
+      handle->superblocks      = uint32s_index_new(DEFAULT_SUPERBLOCK_SIZE);
+      handle->blocks           = uint32s_index_new(DEFAULT_BLOCK_SIZE/4);
    }
 
-   handle->min_file_pos = sizeof(header) + state_size;
    if(vsn > 0)
-      bsv_movie_read_next_events(handle);
+     bsv_movie_read_next_events(handle, false);
 
 
    return true;
@@ -174,19 +193,20 @@ static bool bsv_movie_init_record(
    header[CRC_INDEX]        = swap_if_big32(content_crc);
 
    info_size                = core_serialize_size();
-
    state_size               = (unsigned)info_size;
 
-   header[STATE_SIZE_INDEX] = swap_if_big32(state_size);
-   handle->identifier = (int64_t)t;
+   header[STATE_SIZE_INDEX] = 0; /* Will fill this in later */
+   handle->identifier       = (int64_t)t;
    *((int64_t *)(header+IDENTIFIER_INDEX)) = time_lil;
    intfstream_write(handle->file, header, HEADER_LEN * sizeof(uint32_t));
-
-   handle->min_file_pos     = sizeof(header) + state_size;
-   handle->state_size       = state_size;
+   
+   handle->superblocks      = uint32s_index_new(DEFAULT_SUPERBLOCK_SIZE);
+   handle->blocks           = uint32s_index_new(DEFAULT_BLOCK_SIZE/4);
 
    if (state_size)
    {
+      uint16_t superblock_size = DEFAULT_SUPERBLOCK_SIZE;
+      uint16_t block_size      = DEFAULT_BLOCK_SIZE;
       retro_ctx_serialize_info_t serial_info;
       uint8_t *st      = (uint8_t*)malloc(state_size);
 
@@ -194,14 +214,23 @@ static bool bsv_movie_init_record(
          return false;
 
       handle->state    = st;
-
       serial_info.data = handle->state;
       serial_info.size = state_size;
 
       core_serialize(&serial_info);
-
-      intfstream_write(handle->file,
-            handle->state, state_size);
+      intfstream_write(handle->file, &superblock_size, sizeof(uint16_t));
+      intfstream_write(handle->file, &block_size, sizeof(uint16_t));
+      state_size = 4 + bsv_movie_write_deduped_state(handle, handle->state, state_size);
+      intfstream_seek(handle->file, STATE_SIZE_INDEX * sizeof(uint32_t), SEEK_SET);
+      intfstream_write(handle->file, &state_size, sizeof(uint32_t));
+      handle->min_file_pos     = sizeof(header) + state_size;
+      handle->state_size       = state_size;
+      intfstream_seek(handle->file, handle->min_file_pos, SEEK_SET);
+   }
+   else
+   {
+      handle->min_file_pos = sizeof(header);
+      handle->state_size   = 0;
    }
 
    return true;
@@ -214,6 +243,10 @@ void bsv_movie_free(bsv_movie_t *handle)
 
    free(handle->state);
    free(handle->frame_pos);
+
+   uint32s_index_free(handle->superblocks);
+   uint32s_index_free(handle->blocks);
+
    free(handle);
 }
 
