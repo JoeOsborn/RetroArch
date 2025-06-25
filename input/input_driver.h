@@ -236,8 +236,8 @@ struct bsv_movie
    bool did_rewind;
 
    /* Block index and superblock index for incremental checkpoints */
-   uint32s_index_t superblocks;
-   uint32s_index_t blocks;
+   uint32s_index_t *superblocks;
+   uint32s_index_t *blocks;
 };
 
 typedef struct bsv_movie bsv_movie_t;
@@ -1055,6 +1055,9 @@ void bsv_movie_finish_rewind(input_driver_state_t *input_st);
 void bsv_movie_deinit(input_driver_state_t *input_st);
 void bsv_movie_deinit_full(input_driver_state_t *input_st);
 void bsv_movie_enqueue(input_driver_state_t *input_st, bsv_movie_t *state, enum bsv_flags flags);
+
+size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t state_size);
+bool bsv_movie_read_deduped_state(bsv_movie_t *movie);
 
 bool movie_start_playback(input_driver_state_t *input_st, char *path);
 bool movie_start_record(input_driver_state_t *input_st, char *path);

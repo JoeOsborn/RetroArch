@@ -1,95 +1,138 @@
 #include "uint32s_index.h"
+#include <string.h>
+#include <array/rhmap.h>
+#include <array/rbuf.h>
 
-uint32s_index_t *uint32s_index_new(uint32_t object_size)
+uint32s_index_t *uint32s_index_new(size_t object_size)
 {
    uint32_t *zeros = calloc(object_size, sizeof(uint32_t));
    uint32s_index_t *index = malloc(sizeof(uint32s_index_t));
    index->object_size = object_size;
-   index->trie = NULL;
-   index->roots = NULL;
+   index->index = NULL;
    index->objects = NULL;
    uint32s_index_insert(index, zeros);
    free(zeros);
    return index;
 }
 
-bool _uint32s_keypart_matches(uint32_t *key, uint32_t *check)
+uint32_t uint32s_hash_bytes(uint8_t *bytes, size_t len)
 {
-  int result = 1;
-  for(int i = 0; i < UINT32S_INDEX_KEYLEN; i++)
-    {
-      result &= key[i] == check[i];
-    }
-  return result;
+   uint32_t hash = (uint32_t)0x811c9dc5;
+   for(size_t i = 0; i < len; i++)
+      hash = ((hash * (uint32_t)0x01000193) ^ (uint32_t)(bytes[i]));
+   return (hash ? hash : 1);
 }
 
-uint32s_insert_result uint32s_index_insert(uint32s_index_t *index, uint32_t *object)
+bool uint32s_bucket_get(uint32s_index_t *index, struct uint32s_bucket *bucket, uint32_t *object, size_t size_bytes, uint32_t *out_idx)
 {
-   uint32_t steps = index->object_size / UINT32S_INDEX_KEYLEN;
-   uint32_t step  = 0;
-   uint32_t *options = index->roots;
-   uint32s_insert_result result;
+   uint32_t idx;
+   bool small = (bucket->len < 4);
+   for(uint32_t i = 0; i < bucket->len; i++)
+   {
+      idx = small ? bucket->contents.idxs[i] : bucket->contents.vec.idxs[i];
+      if(memcmp(index->objects[idx], object, size_bytes) == 0)
+      {
+         *out_idx = idx;
+         return true;
+      }
+   }
+   return false;
+}
+
+void uint32s_bucket_expand(struct uint32s_bucket *bucket, uint32_t idx)
+{
+   if(bucket->len < 3)
+   {
+      bucket->contents.idxs[bucket->len] = idx;
+      bucket->len++;
+   }
+   else if(bucket->len == 3)
+   {
+      uint32_t *idxs = calloc(8, sizeof(uint32_t));
+      memcpy(idxs, bucket->contents.idxs, 3*sizeof(uint32_t));
+      bucket->contents.vec.cap = 8;
+      bucket->contents.vec.idxs = idxs;
+      bucket->contents.vec.idxs[bucket->len] = idx;
+      bucket->len++;
+   }
+   else if(bucket->len < bucket->contents.vec.cap)
+   {
+      bucket->contents.vec.idxs[bucket->len] = idx;
+      bucket->len++;
+   }
+   else /* bucket->len == bucket->contents.vec.cap */
+   {
+      bucket->contents.vec.cap *= 2;
+      bucket->contents.vec.idxs = realloc(bucket->contents.vec.idxs, bucket->contents.vec.cap*sizeof(uint32_t));
+      bucket->contents.vec.idxs[bucket->len] = idx;
+      bucket->len++;
+   }
+}
+
+uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *object)
+{
+   struct uint32s_bucket bucket;
+   uint32s_insert_result_t result;
+   size_t size_bytes = index->object_size * sizeof(uint32_t);
+   uint32_t hash = uint32s_hash_bytes((uint8_t *)object, size_bytes);
+   uint32_t idx;
+   uint32_t *copy, *check;
    result.index = 0;
    result.is_new = false;
-   for(step = 0; step < steps; step++)
-     {
-       int opt;
-       for(opt = 0; opt < RBUF_LEN(options); opt++)
-         {
-           uint32_t option = index->trie[options[opt]];
-           if(_uint32s_keypart_matches(option.key, object+(step*UINT32S_INDEX_KEYLEN)))
-             {
-               options = option.children;
-               break;
-             }
-         }
-       if(opt >= RBUF_LEN(options))
-         {
-           uint32_t *copy = malloc(index->object_size*sizeof(uint32_t));
-           uint32_t idx = RBUF_LEN(index->objects);
-           uint32s_prefix *node = calloc(1, sizeof(uint32s_prefix));
-           memcpy(copy, object, index->object_size*sizeof(uint32_t));
-           RBUF_PUSH(index->objects, copy);
-           result.index = idx;
-           result.is_new = true;
-           for(int k = 0; k < UINT32S_INDEX_KEYLEN; k++)
-             {
-               node->key[k] = object[step*UINT32S_INDEX_KEYLEN+k];
-             }
-           RBUF_PUSH(options, node);
-           options = node->children;
-           for(; step < steps; step++)
-             {
-               // TODO
-               // push one option into the current options
-               // set options = that node's options
-             }
-           // TODO create value trie node
-           
-           return result;
-         }
-     }
-   result.index = index->trie[options[0]].key[0];
+   if(RHMAP_HAS(index->index, hash))
+   {
+      bucket = RHMAP_GET(index->index, hash);
+      if(uint32s_bucket_get(index, &bucket, object, size_bytes, &result.index))
+      {
+         result.is_new = false;
+         return result;
+      }
+      idx = RBUF_LEN(index->objects);
+      copy = malloc(size_bytes);
+      memcpy(copy, object, size_bytes);
+      RBUF_PUSH(index->objects, copy);
+      result.index = idx;
+      result.is_new = true;
+      uint32s_bucket_expand(&bucket, idx);
+   }
+   else
+   {
+      idx = RBUF_LEN(index->objects);
+      copy = malloc(size_bytes);
+      memcpy(copy, object, size_bytes);
+      RBUF_PUSH(index->objects, copy);
+      bucket.len = 1;
+      bucket.contents.idxs[0] = idx;
+      bucket.contents.idxs[1] = 0;
+      bucket.contents.idxs[2] = 0;
+      RHMAP_SET(index->index, hash, bucket);
+      result.index = idx;
+      result.is_new = true;
+   }
    return result;
 }
 
 uint32_t *uint32s_index_get(uint32s_index_t *index, uint32_t which)
 {
-  return index->objects[which];
+   if(which >= RBUF_LEN(index->objects))
+      return NULL;
+   return index->objects[which];
 }
 
-void uint32s_prefix_free(uint32s_prefix *prefix)
+void uint32s_bucket_free(struct uint32s_bucket bucket)
 {
-   RBUF_FREE(prefix->children);
+   if(bucket.len > 3)
+      free(bucket.contents.vec.idxs);
 }
 
 void uint32s_index_free(uint32s_index_t *index)
 {
-   for(int i = 0; i < RBUF_LEN(index->trie); i++)
-      uint32s_prefix_free(index->trie[i]);
-   RBUF_FREE(index->trie);
-   RBUF_FREE(index->roots);
-   for(int i = 0; i < RBUF_LEN(index->objects))
+   size_t i, cap;
+   for(i = 0, cap = RHMAP_CAP(index->index); i != cap; i++)
+      if(RHMAP_KEY(index->index, i))
+         uint32s_bucket_free(index->index[i]);
+   RHMAP_FREE(index->index);
+   for(i = 0; i < RBUF_LEN(index->objects); i++)
       free(index->objects[i]);
    RBUF_FREE(index->objects);
 }

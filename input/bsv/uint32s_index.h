@@ -7,18 +7,21 @@
 #include <sys/types.h>
 #include <boolean.h>
 
-#define UINT32S_INDEX_KEYLEN 8
-
-struct uint32s_prefix
+struct uint32s_bucket
 {
-   uint32_t key[UINT32S_INDEX_KEYLEN]; /* key for prefixes up to INDEX_KEYLEN, value for terminal nodes */
-   uint32_t *children; /* an rbuf of offsets within the index's trie */
+   uint32_t len; /* if < 4, contents is idxs. */
+   union {
+     uint32_t idxs[3];
+     struct {
+       uint32_t cap;
+       uint32_t *idxs;
+     } vec;
+   } contents;
 };
 struct uint32s_index
 {
-   uint32_t object_size; /* measured in ints */
-   struct uint32s_prefix *trie; /* an rbuf of trie nodes for value->index lookup */
-   uint32_t *roots;      /* an rbuf of root nodes of the trie */
+   size_t object_size; /* measured in ints */
+   struct uint32s_bucket *index; /* an rhmap of buckets for value->index lookup */
    uint32_t **objects;   /* an rbuf of the actual buffers */
 };
 typedef struct uint32s_index uint32s_index_t;
@@ -28,9 +31,12 @@ struct uint32s_insert_result
    uint32_t index;
    bool is_new;
 };
+typedef struct uint32s_insert_result uint32s_insert_result_t;
 
-uint32s_index_t *uint32s_index_new(uint32_t object_size);
-uint32s_insert_result uint32s_index_insert(uint32s_index_t *index, uint32_t *object);
+uint32s_index_t *uint32s_index_new(size_t object_size);
+/* Does not take ownership of object */
+uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *object);
+/* Does not grant ownership of return value */
 uint32_t *uint32s_index_get(uint32s_index_t *index, uint32_t which);
 void uint32s_index_free(uint32s_index_t *index);
 

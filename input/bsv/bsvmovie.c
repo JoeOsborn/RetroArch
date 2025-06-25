@@ -541,3 +541,12 @@ int16_t bsv_movie_read_state(input_driver_state_t *input_st,
    input_st->bsv_movie_state.flags |= BSV_FLAG_MOVIE_END;
    return 0;
 }
+
+size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t state_size)
+{
+   return 0;
+}
+bool bsv_movie_read_deduped_state(bsv_movie_t *movie)
+{
+   return false;
+}
