@@ -71,7 +71,7 @@ void uint32s_bucket_expand(struct uint32s_bucket *bucket, uint32_t idx)
 
 uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *object)
 {
-   struct uint32s_bucket bucket;
+   struct uint32s_bucket *bucket;
    uint32s_insert_result_t result;
    size_t size_bytes = index->object_size * sizeof(uint32_t);
    uint32_t hash = uint32s_hash_bytes((uint8_t *)object, size_bytes);
@@ -81,8 +81,8 @@ uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *o
    result.is_new = false;
    if(RHMAP_HAS(index->index, hash))
    {
-      bucket = RHMAP_GET(index->index, hash);
-      if(uint32s_bucket_get(index, &bucket, object, size_bytes, &result.index))
+      bucket = RHMAP_PTR(index->index, hash);
+      if(uint32s_bucket_get(index, bucket, object, size_bytes, &result.index))
       {
          result.is_new = false;
          return result;
@@ -93,19 +93,20 @@ uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *o
       RBUF_PUSH(index->objects, copy);
       result.index = idx;
       result.is_new = true;
-      uint32s_bucket_expand(&bucket, idx);
+      uint32s_bucket_expand(bucket, idx);
    }
    else
    {
+      struct uint32s_bucket new_bucket;
       idx = RBUF_LEN(index->objects);
       copy = malloc(size_bytes);
       memcpy(copy, object, size_bytes);
       RBUF_PUSH(index->objects, copy);
-      bucket.len = 1;
-      bucket.contents.idxs[0] = idx;
-      bucket.contents.idxs[1] = 0;
-      bucket.contents.idxs[2] = 0;
-      RHMAP_SET(index->index, hash, bucket);
+      new_bucket.len = 1;
+      new_bucket.contents.idxs[0] = idx;
+      new_bucket.contents.idxs[1] = 0;
+      new_bucket.contents.idxs[2] = 0;
+      RHMAP_SET(index->index, hash, new_bucket);
       result.index = idx;
       result.is_new = true;
    }
