@@ -110,9 +110,10 @@
 #define MAPPER_SET_KEY(state, key) (state)->keys[(key) / 32] |= 1 << ((key) % 32)
 #define MAPPER_UNSET_KEY(state, key) (state)->keys[(key) / 32] &= ~(1 << ((key) % 32))
 
-#define REPLAY_TOKEN_INVALID          '\0'
-#define REPLAY_TOKEN_REGULAR_FRAME    'f'
-#define REPLAY_TOKEN_CHECKPOINT_FRAME 'c'
+#define REPLAY_TOKEN_INVALID           '\0'
+#define REPLAY_TOKEN_REGULAR_FRAME     'f'
+#define REPLAY_TOKEN_CHECKPOINT_FRAME  'c'
+#define REPLAY_TOKEN_ICHECKPOINT_FRAME 'i'
 
 /**
  * Takes as input analog key identifiers and converts them to corresponding

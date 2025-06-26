@@ -10,6 +10,8 @@
 #include "../../cheevos/cheevos.h"
 #endif
 
+#define INCREMENTAL_CHECKPOINTS 1
+
 #define BSV_IFRAME_START_TOKEN 0x00
 /* after START:
    frame counter uint
@@ -79,7 +81,7 @@ void bsv_movie_frame_rewind()
       /* If we're at the beginning... */
       handle->frame_counter = 0;
       intfstream_seek(handle->file, (int)handle->min_file_pos, SEEK_SET);
-      // TODO: clear or reset incremental checkpoint table data
+      // TODO 1: clear or reset incremental checkpoint table data
       if (recording)
          intfstream_truncate(handle->file, (int)handle->min_file_pos);
       else
@@ -99,7 +101,7 @@ void bsv_movie_frame_rewind()
       else
          handle->frame_counter = 0;
       intfstream_seek(handle->file, (int)handle->frame_pos[handle->frame_counter & handle->frame_mask], SEEK_SET);
-      // TODO: update incremental checkpoint table data by dropping data from later frames
+      // TODO 2: update incremental checkpoint table data by dropping data from later frames
       if (recording)
          intfstream_truncate(handle->file, (int)handle->frame_pos[handle->frame_counter & handle->frame_mask]);
       else
@@ -109,7 +111,7 @@ void bsv_movie_frame_rewind()
    if (intfstream_tell(handle->file) <= (long)handle->min_file_pos)
    {
       /* We rewound past the beginning. */
-      // TODO: clear or reset incremental checkpoint table data
+      // TODO 3: clear or reset incremental checkpoint table data
 
       if (handle->playback)
       {
@@ -290,11 +292,18 @@ bool bsv_movie_read_next_events(bsv_movie_t *handle, bool skip_checkpoints)
                free(st);
                return false;
             }
-            // incremental decode
             serial_info.data_const = st;
             serial_info.size       = size;
             core_unserialize(&serial_info);
             free(st);
+         }
+      }
+      else if (next_frame_type == REPLAY_TOKEN_ICHECKPOINT_FRAME)
+      {
+         if(!bsv_movie_read_deduped_state(handle))
+         {
+            RARCH_ERR("[STATESTREAM] Couldn't load incremental checkpoint");
+            return false;
          }
       }
    }
@@ -306,7 +315,7 @@ void bsv_movie_scan_from_start(input_driver_state_t *input_st, int32_t len)
    bsv_movie_t *movie = input_st->bsv_movie_state_handle;
    if(movie->version == 0)
      return; /* Old movies don't store enough information to fixup the frame counters. */
-   // TODO: update the checkpoint reference data in the movie structure since we have traveled forward in time
+   // TODO 4: update the checkpoint reference data in the movie structure since we have traveled forward in time
    // if state_size, use the initial state to configure the data structures (maybe add a helper in task_movie.c:133, or have task_movie.c call something in here)
    intfstream_seek(movie->file, movie->min_file_pos, SEEK_SET);
    movie->frame_counter = 0;
@@ -366,18 +375,25 @@ void bsv_movie_next_frame(input_driver_state_t *input_st)
             && (handle->frame_counter % (checkpoint_interval*60) == 0))
       {
          retro_ctx_serialize_info_t serial_info;
-         uint8_t frame_tok = REPLAY_TOKEN_CHECKPOINT_FRAME;
+         uint8_t frame_tok;
          size_t _len       = core_serialize_size();
          uint64_t size     = swap_if_big64(_len);
          uint8_t *st       = (uint8_t*)malloc(_len);
          serial_info.data  = st;
          serial_info.size  = _len;
          core_serialize(&serial_info);
-         // TODO incremental encode
+#if INCREMENTAL_CHECKPOINTS
+         frame_tok = REPLAY_TOKEN_ICHECKPOINT_FRAME;
+         /* "next frame is an incremental checkpoint" */
+         intfstream_write(handle->file, (uint8_t *)(&frame_tok), sizeof(uint8_t));
+         bsv_movie_write_deduped_state(handle, st, _len);
+#else
+         frame_tok = REPLAY_TOKEN_CHECKPOINT_FRAME;
          /* "next frame is a checkpoint" */
          intfstream_write(handle->file, (uint8_t *)(&frame_tok), sizeof(uint8_t));
          intfstream_write(handle->file, &size, sizeof(uint64_t));
          intfstream_write(handle->file, st, _len);
+#endif
          free(st);
       }
       else
