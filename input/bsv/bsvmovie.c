@@ -4,9 +4,34 @@
 #include "../../verbosity.h"
 #include "../input_driver.h"
 #include "../../tasks/task_content.h"
+#include "../../libretro-db/rmsgpack.h"
 #ifdef HAVE_CHEEVOS
 #include "../../cheevos/cheevos.h"
 #endif
+
+#define BSV_IFRAME_START_TOKEN 0x00
+/* after START:
+   frame counter uint
+   state size (uncompressed) uint
+   new block and new superblock data (see below)
+   superblock seq (see below)
+ */
+#define BSV_IFRAME_NEW_BLOCK_TOKEN 0x01
+/* after NEW_BLOCK:
+   index uint
+   binary
+ */
+#define BSV_IFRAME_NEW_SUPERBLOCK_TOKEN 0x02
+/* after NEW_SUPERBLOCK:
+   index uint
+   array of uints
+*/
+#define BSV_IFRAME_SUPERBLOCK_SEQ_TOKEN 0x03
+/* after SUPERBLOCK_SEQ:
+   array of uints
+   */
+
+/* Later, tokens for pframes */
 
 /* Forward declaration */
 void bsv_movie_free(bsv_movie_t*);
@@ -544,59 +569,75 @@ int16_t bsv_movie_read_state(input_driver_state_t *input_st,
 
 size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t state_size)
 {
-   size_t block_size = movie->block_index.object_size;
-   size_t superblock_size = movie->superblock_index.object_size;
+   size_t block_size = movie->blocks->object_size;
+   size_t superblock_size = movie->superblocks->object_size;
    size_t superblock_byte_size = superblock_size*block_size;
    size_t superblock_count = state_size / superblock_byte_size + (state_size % superblock_byte_size != 0);
-   uint32_t *superblock_sequence = calloc(superblock_count, sizeof(uint32_t));
+   uint32_t *superblock_seq = calloc(superblock_count, sizeof(uint32_t));
    uint32_t *superblock_buf = calloc(superblock_size, sizeof(uint32_t));
    uint8_t *padded_block = NULL;
-   // todo writes here will use rmsgpack
-   // todo write header including state size and maybe frame counter
-   rmsgpack_write_int()
+   rmsgpack_write_uint(movie->file, BSV_IFRAME_START_TOKEN);
+   rmsgpack_write_uint(movie->file, movie->frame_counter);
+   rmsgpack_write_uint(movie->file, state_size);
    for(size_t superblock = 0; superblock < superblock_count; superblock++)
    {
       uint32s_insert_result_t found_block;
       for(size_t block = 0; block < superblock_size; block++)
-        {
-          size_t block_start = superblock*superblock_byte_size+block*block_size;
-          if(block_start > state_size)
-            {
-              /* pad superblocks with zero blocks */
-              found_block.index = 0;
-              found_block.is_new = false;
-            }
-          else if(block_start + block_size > state_size)
-            {
-              if(!padded_block)
-                padded_block = calloc(block_size);
-              else
-                memset(padded_block,0,block_size);
-              memcpy(padded_block, state+block_start, block_start + block_size - state_size);
-              found_block = uint32s_index_insert(movie->block_index, state+block_start);
-            }
-          else
-            {
-         found_block = uint32s_index_insert(movie->block_index, state+block_start);
-            }
+      {
+         size_t block_start = superblock*superblock_byte_size+block*block_size;
+         if(block_start > state_size)
+         {
+            /* pad superblocks with zero blocks */
+            found_block.index = 0;
+            found_block.is_new = false;
+         }
+         else if(block_start + block_size > state_size)
+         {
+            if(!padded_block)
+               padded_block = calloc(block_size, sizeof(uint8_t));
+            else
+               memset(padded_block,0,block_size);
+            memcpy(padded_block, state+block_start, block_start + block_size - state_size);
+            found_block = uint32s_index_insert(movie->blocks, (uint32_t*)(state+block_start));
+         }
+         else
+         {
+            found_block = uint32s_index_insert(movie->blocks, (uint32_t*)(state+block_start));
+         }
          if(found_block.is_new)
          {
-            // TODO: write "here is a new block" and new block to file
-            // By definition this superblock is also new
+            /* write "here is a new block" and new block to file */
+            rmsgpack_write_uint(movie->file, BSV_IFRAME_NEW_BLOCK_TOKEN);
+            rmsgpack_write_uint(movie->file, found_block.index);
+            rmsgpack_write_bin(movie->file, state+block_start, block_size);
          }
          superblock_buf[block] = found_block.index;
         }
-      found_block = uint32s_index_insert(movie->superblock_index, superblock_buf);
+      found_block = uint32s_index_insert(movie->superblocks, superblock_buf);
       if(found_block.is_new)
-        {
-          // TODO write "here is a new superblock" and new superblock to file
-        }
+      {
+         /* write "here is a new superblock" and new superblock to file */
+         rmsgpack_write_uint(movie->file, BSV_IFRAME_NEW_SUPERBLOCK_TOKEN);
+         rmsgpack_write_uint(movie->file, found_block.index);
+         rmsgpack_write_array_header(movie->file, superblock_size);
+         for(uint32_t i = 0; i < superblock_size; i++)
+         {
+            rmsgpack_write_uint(movie->file, superblock_buf[i]);
+         }
+      }
       superblock_seq[superblock] = found_block.index;
    }
-  // TODO write  "here is the superblock seq" and superblock seq to file
-  free(superblock);
-  if(padded_block)
-    free(padded_block);
+   /* write "here is the superblock seq" and superblock seq to file */
+   rmsgpack_write_uint(movie->file, BSV_IFRAME_SUPERBLOCK_SEQ_TOKEN);
+   rmsgpack_write_array_header(movie->file, superblock_count);
+   for(uint32_t i = 0; i < superblock_count; i++)
+   {
+       rmsgpack_write_uint(movie->file, superblock_seq[i]);
+   }
+   free(superblock_buf);
+   free(superblock_seq);
+   if(padded_block)
+      free(padded_block);
 
    return 0;
 }
