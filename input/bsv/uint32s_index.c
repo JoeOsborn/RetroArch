@@ -113,6 +113,36 @@ uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *o
    return result;
 }
 
+bool uint32s_index_insert_exact(uint32s_index_t *index, uint32_t idx, uint32_t *object)
+{
+   struct uint32s_bucket *bucket;
+   uint32_t hash;
+   size_t size_bytes;
+   if(idx != RBUF_LEN(index->objects))
+      return false;
+   size_bytes = index->object_size * sizeof(uint32_t);
+   hash = uint32s_hash_bytes((uint8_t *)object, size_bytes);
+   if(RHMAP_HAS(index->index, hash))
+   {
+      uint32_t _index;
+      bucket = RHMAP_PTR(index->index, hash);
+      if(uint32s_bucket_get(index, bucket, object, size_bytes, &_index))
+         return false;
+      uint32s_bucket_expand(bucket, idx);
+   }
+   else
+   {
+      struct uint32s_bucket new_bucket;
+      new_bucket.len = 1;
+      new_bucket.contents.idxs[0] = idx;
+      new_bucket.contents.idxs[1] = 0;
+      new_bucket.contents.idxs[2] = 0;
+      RHMAP_SET(index->index, hash, new_bucket);
+   }
+   RBUF_PUSH(index->objects, object);
+   return true;
+}
+
 uint32_t *uint32s_index_get(uint32s_index_t *index, uint32_t which)
 {
    if(which >= RBUF_LEN(index->objects))
