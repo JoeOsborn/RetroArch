@@ -578,9 +578,10 @@ size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t 
    uint32_t *superblock_seq = calloc(superblock_count, sizeof(uint32_t));
    uint32_t *superblock_buf = calloc(superblock_size, sizeof(uint32_t));
    uint8_t *padded_block = NULL;
-   rmsgpack_write_uint(movie->file, BSV_IFRAME_START_TOKEN);
-   rmsgpack_write_uint(movie->file, movie->frame_counter);
-   rmsgpack_write_uint(movie->file, state_size);
+   size_t write_count = 0;
+   write_count += rmsgpack_write_uint(movie->file, BSV_IFRAME_START_TOKEN);
+   write_count += rmsgpack_write_uint(movie->file, movie->frame_counter);
+   write_count += rmsgpack_write_uint(movie->file, state_size);
    for(size_t superblock = 0; superblock < superblock_count; superblock++)
    {
       uint32s_insert_result_t found_block;
@@ -609,39 +610,39 @@ size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t 
          if(found_block.is_new)
          {
             /* write "here is a new block" and new block to file */
-            rmsgpack_write_uint(movie->file, BSV_IFRAME_NEW_BLOCK_TOKEN);
-            rmsgpack_write_uint(movie->file, found_block.index);
-            rmsgpack_write_bin(movie->file, state+block_start, block_byte_size);
+            write_count += rmsgpack_write_uint(movie->file, BSV_IFRAME_NEW_BLOCK_TOKEN);
+            write_count += rmsgpack_write_uint(movie->file, found_block.index);
+            write_count += rmsgpack_write_bin(movie->file, state+block_start, block_byte_size);
          }
          superblock_buf[block] = found_block.index;
-        }
+      }
       found_block = uint32s_index_insert(movie->superblocks, superblock_buf);
       if(found_block.is_new)
       {
          /* write "here is a new superblock" and new superblock to file */
-         rmsgpack_write_uint(movie->file, BSV_IFRAME_NEW_SUPERBLOCK_TOKEN);
-         rmsgpack_write_uint(movie->file, found_block.index);
-         rmsgpack_write_array_header(movie->file, superblock_size);
+         write_count += rmsgpack_write_uint(movie->file, BSV_IFRAME_NEW_SUPERBLOCK_TOKEN);
+         write_count += rmsgpack_write_uint(movie->file, found_block.index);
+         write_count += rmsgpack_write_array_header(movie->file, superblock_size);
          for(uint32_t i = 0; i < superblock_size; i++)
          {
-            rmsgpack_write_uint(movie->file, superblock_buf[i]);
+            write_count += rmsgpack_write_uint(movie->file, superblock_buf[i]);
          }
       }
       superblock_seq[superblock] = found_block.index;
    }
    /* write "here is the superblock seq" and superblock seq to file */
-   rmsgpack_write_uint(movie->file, BSV_IFRAME_SUPERBLOCK_SEQ_TOKEN);
-   rmsgpack_write_array_header(movie->file, superblock_count);
+   write_count += rmsgpack_write_uint(movie->file, BSV_IFRAME_SUPERBLOCK_SEQ_TOKEN);
+   write_count += rmsgpack_write_array_header(movie->file, superblock_count);
    for(uint32_t i = 0; i < superblock_count; i++)
    {
-       rmsgpack_write_uint(movie->file, superblock_seq[i]);
+       write_count += rmsgpack_write_uint(movie->file, superblock_seq[i]);
    }
-   free(superblock_buf); 
+   free(superblock_buf);
    free(superblock_seq);
    if(padded_block)
       free(padded_block);
 
-   return 0;
+   return write_count;
 }
 
 bool bsv_movie_read_deduped_state(bsv_movie_t *movie)
@@ -718,7 +719,7 @@ bool bsv_movie_read_deduped_state(bsv_movie_t *movie)
             rmsgpack_dom_value_free(&item);
             goto exit;
          }
-         /* do not free binary rmsgpack item since insert_exact takes its allocation */
+         /* do not free binary rmsgpack item since insert_exact takes over its allocation */
          break;
       case BSV_IFRAME_NEW_SUPERBLOCK_TOKEN:
          rmsgpack_dom_read(movie->file, &item);
@@ -754,6 +755,7 @@ bool bsv_movie_read_deduped_state(bsv_movie_t *movie)
             free(superblock);
             goto exit;
          }
+         /* Do not free superblock since insert_exact takes over its allocation */
          rmsgpack_dom_value_free(&item);
          break;
       case BSV_IFRAME_SUPERBLOCK_SEQ_TOKEN:
