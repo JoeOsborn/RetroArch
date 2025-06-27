@@ -18,11 +18,16 @@ struct uint32s_bucket
      } vec;
    } contents;
 };
+struct uint32s_frame_addition {
+   uint64_t frame_counter;
+   uint32_t first_index; /* lowest index added on this frame */
+};
 struct uint32s_index
 {
    size_t object_size; /* measured in ints */
    struct uint32s_bucket *index; /* an rhmap of buckets for value->index lookup */
    uint32_t **objects;   /* an rbuf of the actual buffers */
+   struct uint32s_frame_addition *additions; /* an rbuf of addition info */
 };
 typedef struct uint32s_index uint32s_index_t;
 
@@ -35,11 +40,17 @@ typedef struct uint32s_insert_result uint32s_insert_result_t;
 
 uint32s_index_t *uint32s_index_new(size_t object_size);
 /* Does not take ownership of object */
-uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *object);
+uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *object, uint64_t frame);
 /* Does take ownership, requires idx is the exact next index and object not in index */
-bool uint32s_index_insert_exact(uint32s_index_t *index, uint32_t idx, uint32_t *object);
+bool uint32s_index_insert_exact(uint32s_index_t *index, uint32_t idx, uint32_t *object, uint64_t frame);
 /* Does not grant ownership of return value */
 uint32_t *uint32s_index_get(uint32s_index_t *index, uint32_t which);
 void uint32s_index_free(uint32s_index_t *index);
+
+/* goes backwards from end of additions */
+void uint32s_index_remove_after(uint32s_index_t *index, uint64_t frame);
+/* removes all data from index */
+void uint32s_index_clear(uint32s_index_t *index);
+
 
 #endif /* __UINT32S_INDEX__H */

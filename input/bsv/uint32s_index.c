@@ -25,11 +25,10 @@ uint32_t uint32s_hash_bytes(uint8_t *bytes, size_t len)
 
 bool uint32s_bucket_get(uint32s_index_t *index, struct uint32s_bucket *bucket, uint32_t *object, size_t size_bytes, uint32_t *out_idx)
 {
-   uint32_t idx;
-   bool small = (bucket->len < 4);
+   uint32_t *coll = bucket->len < 4 ? bucket->contents.idxs : bucket->contents.vec.idxs;
    for(uint32_t i = 0; i < bucket->len; i++)
    {
-      idx = small ? bucket->contents.idxs[i] : bucket->contents.vec.idxs[i];
+      uint32_t idx = coll[i];
       if(memcmp(index->objects[idx], object, size_bytes) == 0)
       {
          *out_idx = idx;
@@ -69,7 +68,29 @@ void uint32s_bucket_expand(struct uint32s_bucket *bucket, uint32_t idx)
    }
 }
 
-uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *object)
+bool uint32s_bucket_remove(struct uint32s_bucket *bucket, uint32_t idx)
+{
+   bool small = bucket->len < 4;
+   uint32_t *coll = small ? bucket->contents.idxs : bucket->contents.vec.idxs;
+   for(int i = 0; i < bucket->len; i++)
+   {
+      if(bucket[i] == idx)
+      {
+         if(bucket->len == 4)
+         {
+            memcpy((uint8_t *)bucket->contents.idxs, (uint8_t *)coll, 3*sizeof(uint32_t));
+            free(coll);
+         }
+         else
+            memmove((uint8_t*)(coll+i), (uint8_t*)(coll+i+1), (bucket->len-(i+1))*sizeof(uint32_t));
+         bucket->len--;
+         return true;
+      }
+   }
+   return false;
+}
+
+uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *object, uint64_t frame)
 {
    struct uint32s_bucket *bucket;
    uint32s_insert_result_t result;
@@ -77,6 +98,7 @@ uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *o
    uint32_t hash = uint32s_hash_bytes((uint8_t *)object, size_bytes);
    uint32_t idx;
    uint32_t *copy, *check;
+   uint32_t additions_len = RBUF_LEN(index->additions);
    result.index = 0;
    result.is_new = false;
    if(RHMAP_HAS(index->index, hash))
@@ -110,18 +132,27 @@ uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *o
       result.index = idx;
       result.is_new = true;
    }
+   if(additions_len == 0 || index->additions[additions_len-1].frame_counter < frame)
+   {
+      struct uint32s_frame_addition addition;
+      addition.frame_counter = frame;
+      addition.first_index = result.index;
+      RBUF_PUSH(index->additions, addition);
+   }
    return result;
 }
 
-bool uint32s_index_insert_exact(uint32s_index_t *index, uint32_t idx, uint32_t *object)
+bool uint32s_index_insert_exact(uint32s_index_t *index, uint32_t idx, uint32_t *object, uint64_t frame)
 {
    struct uint32s_bucket *bucket;
    uint32_t hash;
    size_t size_bytes;
+   uint32_t additions_len;
    if(idx != RBUF_LEN(index->objects))
       return false;
    size_bytes = index->object_size * sizeof(uint32_t);
    hash = uint32s_hash_bytes((uint8_t *)object, size_bytes);
+   additions_len = RBUF_LEN(index->additions);
    if(RHMAP_HAS(index->index, hash))
    {
       uint32_t _index;
@@ -140,6 +171,13 @@ bool uint32s_index_insert_exact(uint32s_index_t *index, uint32_t idx, uint32_t *
       RHMAP_SET(index->index, hash, new_bucket);
    }
    RBUF_PUSH(index->objects, object);
+   if(additions_len == 0 || index->additions[additions_len-1].frame_counter < frame)
+   {
+      struct uint32s_frame_addition addition;
+      addition.frame_counter = frame;
+      addition.first_index = result.index;
+      RBUF_PUSH(index->additions, addition);
+   }
    return true;
 }
 
@@ -149,6 +187,43 @@ uint32_t *uint32s_index_get(uint32s_index_t *index, uint32_t which)
       return NULL;
    return index->objects[which];
 }
+
+void uint32s_index_pop(uint32s_index_t *index)
+{
+   uint32_t idx = RBUF_LEN(index->objects)-1;
+   uint32_t *object = RBUF_POP(index->objects);
+   struct uint32s_bucket *bucket = RHMAP_PTR(index->index, hash);
+   uint32s_bucket_remove(bucket, idx);
+}
+
+/* goes backwards from end of additions */
+void uint32s_index_remove_after(uint32s_index_t *index, uint64_t frame)
+{
+   for(int i = RHBUF_LEN(index->additions)-1; i >= 0; i--)
+   {
+      struct uint32s_additions add = index->additions[i];
+      if(add.frame_counter < frame)
+         break;
+      while(add.first_index > RBUF_LEN(index->objects))
+         uint32s_index_pop(index);
+   }
+   RHBUF_RESIZE(index->additions,i+1);
+}
+
+/* removes all data from index */
+void uint32s_index_clear(uint32s_index_t *index)
+{
+   size_t i, cap;
+   for(i = 0, cap = RHMAP_CAP(index->index); i != cap; i++)
+      if(RHMAP_KEY(index->index, i))
+         uint32s_bucket_free(index->index[i]);
+   RHMAP_CLEAR(index->index);
+   for(i = 0; i < RBUF_LEN(index->objects); i++)
+      free(index->objects[i]);
+   RBUF_CLEAR(index->objects);
+   RBUF_CLEAR(index->additions);
+}
+
 
 void uint32s_bucket_free(struct uint32s_bucket bucket)
 {
@@ -166,5 +241,7 @@ void uint32s_index_free(uint32s_index_t *index)
    for(i = 0; i < RBUF_LEN(index->objects); i++)
       free(index->objects[i]);
    RBUF_FREE(index->objects);
+   RBUF_FREE(index->additions);
+   free(index);
 }
 

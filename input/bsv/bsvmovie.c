@@ -81,7 +81,9 @@ void bsv_movie_frame_rewind()
       /* If we're at the beginning... */
       handle->frame_counter = 0;
       intfstream_seek(handle->file, (int)handle->min_file_pos, SEEK_SET);
-      // TODO 1: clear or reset incremental checkpoint table data
+      /* clear incremental checkpoint table data.  We do this both on recording and playback for simplicity. */
+      uint32s_index_clear(handle->superblocks);
+      uint32s_index_clear(handle->blocks);
       if (recording)
          intfstream_truncate(handle->file, (int)handle->min_file_pos);
       else
@@ -97,33 +99,42 @@ void bsv_movie_frame_rewind()
        * plus another. */
       uint8_t delta = handle->first_rewind ? 1 : 2;
       if (handle->frame_counter >= delta)
+      {
          handle->frame_counter -= delta;
+         uint32s_index_remove_after(handle->superblocks, handle->frame_counter);
+         uint32s_index_remove_after(handle->blocks, handle->frame_counter);
+      }
       else
+      {
          handle->frame_counter = 0;
+         uint32s_index_clear(handle->superblocks);
+         uint32s_index_clear(handle->blocks);
+      }
       intfstream_seek(handle->file, (int)handle->frame_pos[handle->frame_counter & handle->frame_mask], SEEK_SET);
-      // TODO 2: update incremental checkpoint table data by dropping data from later frames
       if (recording)
          intfstream_truncate(handle->file, (int)handle->frame_pos[handle->frame_counter & handle->frame_mask]);
       else
-        bsv_movie_read_next_events(handle, false);
+         bsv_movie_read_next_events(handle, false);
    }
 
    if (intfstream_tell(handle->file) <= (long)handle->min_file_pos)
    {
       /* We rewound past the beginning. */
-      // TODO 3: clear or reset incremental checkpoint table data
-
       if (handle->playback)
       {
          intfstream_seek(handle->file, (int)handle->min_file_pos, SEEK_SET);
+         uint32s_index_clear(handle->superblocks);
+         uint32s_index_clear(handle->blocks);
          bsv_movie_read_next_events(handle, false);
       }
       else
       {
          retro_ctx_serialize_info_t serial_info;
-
+         size_t state_size;
          /* If recording, we simply reset
           * the starting point. Nice and easy. */
+         uint32s_index_clear(handle->superblocks);
+         uint32s_index_clear(handle->blocks);
 
          intfstream_seek(handle->file, 4 * sizeof(uint32_t), SEEK_SET);
          intfstream_truncate(handle->file, 4 * sizeof(uint32_t));
@@ -132,8 +143,9 @@ void bsv_movie_frame_rewind()
          serial_info.size = handle->state_size;
 
          core_serialize(&serial_info);
-
-         intfstream_write(handle->file, handle->state, handle->state_size);
+         state_size = 4 + bsv_write_deduped_state(handle, handle->state, handle->state_size);
+         handle->min_file_pos = intfstream_tell(handle->file);
+         handle->state_size = state_size;
       }
    }
 }
@@ -315,8 +327,6 @@ void bsv_movie_scan_from_start(input_driver_state_t *input_st, int32_t len)
    bsv_movie_t *movie = input_st->bsv_movie_state_handle;
    if(movie->version == 0)
      return; /* Old movies don't store enough information to fixup the frame counters. */
-   // TODO 4: update the checkpoint reference data in the movie structure since we have traveled forward in time
-   // if state_size, use the initial state to configure the data structures (maybe add a helper in task_movie.c:133, or have task_movie.c call something in here)
    intfstream_seek(movie->file, movie->min_file_pos, SEEK_SET);
    movie->frame_counter = 0;
    movie->frame_pos[0] = intfstream_tell(movie->file);
@@ -617,11 +627,15 @@ size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t 
             else
                memset(padded_block,0,block_byte_size);
             memcpy(padded_block, state+block_start, state_size - block_start);
-            found_block = uint32s_index_insert(movie->blocks, (uint32_t*)padded_block);
+            found_block = uint32s_index_insert(movie->blocks,
+                                               (uint32_t*)padded_block,
+                                               movie->frame_counter);
          }
          else
          {
-            found_block = uint32s_index_insert(movie->blocks, (uint32_t*)(state+block_start));
+            found_block = uint32s_index_insert(movie->blocks,
+                                               (uint32_t*)(state+block_start),
+                                               movie->frame_counter);
          }
          if(found_block.is_new)
          {
@@ -632,7 +646,7 @@ size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t 
          }
          superblock_buf[block] = found_block.index;
       }
-      found_block = uint32s_index_insert(movie->superblocks, superblock_buf);
+      found_block = uint32s_index_insert(movie->superblocks, superblock_buf, movie->frame_counter);
       if(found_block.is_new)
       {
          /* write "here is a new superblock" and new superblock to file */
@@ -729,7 +743,7 @@ bool bsv_movie_read_deduped_state(bsv_movie_t *movie)
             rmsgpack_dom_value_free(&item);
             goto exit;
          }
-         if(!uint32s_index_insert_exact(movie->blocks, index, (uint32_t *)item.val.binary.buff))
+         if(!uint32s_index_insert_exact(movie->blocks, index, (uint32_t *)item.val.binary.buff, movie->frame_counter))
          {
             RARCH_ERR("[STATESTREAM] couldn't insert new block at right index\n");
             rmsgpack_dom_value_free(&item);
@@ -764,7 +778,7 @@ bool bsv_movie_read_deduped_state(bsv_movie_t *movie)
             /* assert(inner_item.type == RDT_UINT); */
             superblock[i] = inner_item.val.uint_;
          }
-         if(!uint32s_index_insert_exact(movie->superblocks, index, superblock))
+         if(!uint32s_index_insert_exact(movie->superblocks, index, superblock, movie->frame_counter))
          {
             RARCH_ERR("[STATESTREAM] new superblock couldn't be inserted at right index\n");
             rmsgpack_dom_value_free(&item);
