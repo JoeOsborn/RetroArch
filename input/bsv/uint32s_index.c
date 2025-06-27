@@ -10,8 +10,9 @@ uint32s_index_t *uint32s_index_new(size_t object_size)
    index->object_size = object_size;
    index->index = NULL;
    index->objects = NULL;
-   uint32s_index_insert(index, zeros);
-   free(zeros);
+   /* transfers ownership of zero buffer */
+   uint32s_index_insert_exact(index, 0, zeros, 0);
+   RBUF_CLEAR(index->additions); /* scrap first addition, we never want to delete 0s during rewind */
    return index;
 }
 
@@ -72,9 +73,11 @@ bool uint32s_bucket_remove(struct uint32s_bucket *bucket, uint32_t idx)
 {
    bool small = bucket->len < 4;
    uint32_t *coll = small ? bucket->contents.idxs : bucket->contents.vec.idxs;
-   for(int i = 0; i < bucket->len; i++)
+   if(idx == 0) /* never remove 0s pattern */
+      return false;
+   for(int i = 0; i < (int)bucket->len; i++)
    {
-      if(bucket[i] == idx)
+      if(coll[i] == idx)
       {
          if(bucket->len == 4)
          {
@@ -175,7 +178,7 @@ bool uint32s_index_insert_exact(uint32s_index_t *index, uint32_t idx, uint32_t *
    {
       struct uint32s_frame_addition addition;
       addition.frame_counter = frame;
-      addition.first_index = result.index;
+      addition.first_index = idx;
       RBUF_PUSH(index->additions, addition);
    }
    return true;
@@ -192,6 +195,8 @@ void uint32s_index_pop(uint32s_index_t *index)
 {
    uint32_t idx = RBUF_LEN(index->objects)-1;
    uint32_t *object = RBUF_POP(index->objects);
+   size_t size_bytes = index->object_size * sizeof(uint32_t);
+   uint32_t hash = uint32s_hash_bytes((uint8_t *)object, size_bytes);
    struct uint32s_bucket *bucket = RHMAP_PTR(index->index, hash);
    uint32s_bucket_remove(bucket, idx);
 }
@@ -199,36 +204,40 @@ void uint32s_index_pop(uint32s_index_t *index)
 /* goes backwards from end of additions */
 void uint32s_index_remove_after(uint32s_index_t *index, uint64_t frame)
 {
-   for(int i = RHBUF_LEN(index->additions)-1; i >= 0; i--)
+   int i;
+   for(i = RBUF_LEN(index->additions)-1; i >= 0; i--)
    {
-      struct uint32s_additions add = index->additions[i];
+      struct uint32s_frame_addition add = index->additions[i];
       if(add.frame_counter < frame)
          break;
       while(add.first_index > RBUF_LEN(index->objects))
          uint32s_index_pop(index);
    }
-   RHBUF_RESIZE(index->additions,i+1);
+   RBUF_RESIZE(index->additions, i+1);
+}
+
+void uint32s_bucket_free(struct uint32s_bucket bucket)
+{
+   if(bucket.len > 3)
+      free(bucket.contents.vec.idxs);
 }
 
 /* removes all data from index */
 void uint32s_index_clear(uint32s_index_t *index)
 {
    size_t i, cap;
+   uint32_t *zeros = index->objects[0];
    for(i = 0, cap = RHMAP_CAP(index->index); i != cap; i++)
       if(RHMAP_KEY(index->index, i))
          uint32s_bucket_free(index->index[i]);
    RHMAP_CLEAR(index->index);
-   for(i = 0; i < RBUF_LEN(index->objects); i++)
+   /* don't dealloc all-zeros pattern */
+   for(i = 1; i < RBUF_LEN(index->objects); i++)
       free(index->objects[i]);
    RBUF_CLEAR(index->objects);
+   uint32s_index_insert_exact(index, 0, zeros, 0);
+   /* wipe additions */
    RBUF_CLEAR(index->additions);
-}
-
-
-void uint32s_bucket_free(struct uint32s_bucket bucket)
-{
-   if(bucket.len > 3)
-      free(bucket.contents.vec.idxs);
 }
 
 void uint32s_index_free(uint32s_index_t *index)
