@@ -75,10 +75,11 @@ void bsv_movie_frame_rewind()
 
    handle->did_rewind = true;
 
-   if (     ( (handle->frame_counter & handle->frame_mask) <= 1)
+   if (((handle->frame_counter & handle->frame_mask) <= 1)
          && (handle->frame_pos[0] == handle->min_file_pos))
    {
       /* If we're at the beginning... */
+      RARCH_LOG("[REPLAY] rewound to beginning\n");
       handle->frame_counter = 0;
       intfstream_seek(handle->file, (int)handle->min_file_pos, SEEK_SET);
       /* clear incremental checkpoint table data.  We do this both on recording and playback for simplicity. */
@@ -119,6 +120,7 @@ void bsv_movie_frame_rewind()
 
    if (intfstream_tell(handle->file) <= (long)handle->min_file_pos)
    {
+      RARCH_LOG("rewound past beginning\n");
       /* We rewound past the beginning. */
       if (handle->playback)
       {
@@ -140,10 +142,11 @@ void bsv_movie_frame_rewind()
          intfstream_truncate(handle->file, 4 * sizeof(uint32_t));
 
          serial_info.data = handle->state;
-         serial_info.size = handle->state_size;
+         serial_info.size = core_serialize_size();
 
          core_serialize(&serial_info);
-         state_size = 4 + bsv_write_deduped_state(handle, handle->state, handle->state_size);
+         handle->state = serial_info.data;
+         state_size = 4 + bsv_movie_write_deduped_state(handle, handle->state, serial_info.size);
          handle->min_file_pos = intfstream_tell(handle->file);
          handle->state_size = state_size;
       }
@@ -604,10 +607,16 @@ size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t 
    uint32_t *superblock_seq = calloc(superblock_count, sizeof(uint32_t));
    uint32_t *superblock_buf = calloc(superblock_size, sizeof(uint32_t));
    uint8_t *padded_block = NULL;
-   size_t write_count = 0;
-   write_count += rmsgpack_write_uint(movie->file, BSV_IFRAME_START_TOKEN);
-   write_count += rmsgpack_write_uint(movie->file, movie->frame_counter);
-   write_count += rmsgpack_write_uint(movie->file, state_size);
+
+   size_t write_start = intfstream_tell(movie->file);
+   #if DEBUG
+   RARCH_LOG("[STATESTREAM] write IFRAME_START_TOKEN \n%xd\n",intfstream_tell(movie->file));
+   RARCH_LOG("[STATESTREAM] write frame_counter %d\n", movie->frame_counter);
+   RARCH_LOG("[STATESTREAM] write state_size %d\n", state_size);
+   #endif
+   rmsgpack_write_uint(movie->file, BSV_IFRAME_START_TOKEN);
+   rmsgpack_write_uint(movie->file, movie->frame_counter);
+   rmsgpack_write_uint(movie->file, state_size);
    for(size_t superblock = 0; superblock < superblock_count; superblock++)
    {
       uint32s_insert_result_t found_block;
@@ -640,39 +649,50 @@ size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t 
          if(found_block.is_new)
          {
             /* write "here is a new block" and new block to file */
-            write_count += rmsgpack_write_uint(movie->file, BSV_IFRAME_NEW_BLOCK_TOKEN);
-            write_count += rmsgpack_write_uint(movie->file, found_block.index);
-            write_count += rmsgpack_write_bin(movie->file, state+block_start, block_byte_size);
+            #if DEBUG
+            RARCH_LOG("[STATESTREAM] write new block token for %d/%d index %d, bin of len %d\n%x\n", block, superblock, found_block.index, block_byte_size, intfstream_tell(movie->file));
+            #endif
+            rmsgpack_write_uint(movie->file, BSV_IFRAME_NEW_BLOCK_TOKEN);
+            rmsgpack_write_uint(movie->file, found_block.index);
+            rmsgpack_write_bin(movie->file, state+block_start, block_byte_size);
          }
          superblock_buf[block] = found_block.index;
+         #if DEBUG
+         RARCH_LOG("STATESTREAM] Block %d=%d\n", block, found_block.index);
+         #endif
       }
       found_block = uint32s_index_insert(movie->superblocks, superblock_buf, movie->frame_counter);
       if(found_block.is_new)
       {
          /* write "here is a new superblock" and new superblock to file */
-         write_count += rmsgpack_write_uint(movie->file, BSV_IFRAME_NEW_SUPERBLOCK_TOKEN);
-         write_count += rmsgpack_write_uint(movie->file, found_block.index);
-         write_count += rmsgpack_write_array_header(movie->file, superblock_size);
+         #if DEBUG
+         RARCH_LOG("[STATESTREAM] write new superblock token, index %d, indices of len %d\n%x\n", found_block.index, superblock_size, intfstream_tell(movie->file));
+         #endif
+         rmsgpack_write_uint(movie->file, BSV_IFRAME_NEW_SUPERBLOCK_TOKEN);
+         rmsgpack_write_uint(movie->file, found_block.index);
+         rmsgpack_write_array_header(movie->file, superblock_size);
          for(uint32_t i = 0; i < superblock_size; i++)
          {
-            write_count += rmsgpack_write_uint(movie->file, superblock_buf[i]);
+            rmsgpack_write_uint(movie->file, superblock_buf[i]);
          }
       }
       superblock_seq[superblock] = found_block.index;
    }
    /* write "here is the superblock seq" and superblock seq to file */
-   write_count += rmsgpack_write_uint(movie->file, BSV_IFRAME_SUPERBLOCK_SEQ_TOKEN);
-   write_count += rmsgpack_write_array_header(movie->file, superblock_count);
+   #if DEBUG
+   RARCH_LOG("[STATESTREAM] write superblock seq token, count %d\n%x\n", superblock_count, intfstream_tell(movie->file));
+   #endif
+   rmsgpack_write_uint(movie->file, BSV_IFRAME_SUPERBLOCK_SEQ_TOKEN);
+   rmsgpack_write_array_header(movie->file, superblock_count);
    for(uint32_t i = 0; i < superblock_count; i++)
    {
-       write_count += rmsgpack_write_uint(movie->file, superblock_seq[i]);
+       rmsgpack_write_uint(movie->file, superblock_seq[i]);
    }
    free(superblock_buf);
    free(superblock_seq);
    if(padded_block)
       free(padded_block);
-
-   return write_count;
+   return intfstream_tell(movie->file) - write_start;
 }
 
 bool bsv_movie_read_deduped_state(bsv_movie_t *movie)
@@ -703,7 +723,9 @@ bool bsv_movie_read_deduped_state(bsv_movie_t *movie)
       goto exit;
    }
    frame_counter = item.val.uint_;
+   #if DEBUG
    RARCH_LOG("[STATESTREAM] load incremental checkpoint at frame %d\n", frame_counter);
+   #endif
    rmsgpack_dom_read(movie->file, &item);
    if(item.type != RDT_UINT)
    {
@@ -712,13 +734,17 @@ bool bsv_movie_read_deduped_state(bsv_movie_t *movie)
    }
    state_size = item.val.uint_;
    state_data = calloc(state_size, sizeof(uint8_t));
-   while(rmsgpack_dom_read(movie->file, &item) > 0)
+   #if DEBUG
+   RARCH_LOG("[STATESTREAM] full size %d\n", state_size);
+   #endif
+   while(rmsgpack_dom_read(movie->file, &item) >= 0)
    {
       uint32_t index, *superblock;
       size_t len;
       if(item.type != RDT_UINT)
       {
          RARCH_ERR("[STATESTREAM] state update chunk token type is wrong\n");
+         abort();
          goto exit;
       }
       switch(item.val.uint_) {
@@ -731,6 +757,9 @@ bool bsv_movie_read_deduped_state(bsv_movie_t *movie)
          }
          index = item.val.uint_;
          rmsgpack_dom_read(movie->file, &item);
+         #if DEBUG
+         RARCH_LOG("[STATESTREAM] read block idx %d\n",index);
+         #endif
          if(item.type != RDT_BINARY)
          {
             RARCH_ERR("[STATESTREAM] new block value type is wrong\n");
@@ -760,6 +789,9 @@ bool bsv_movie_read_deduped_state(bsv_movie_t *movie)
          }
          index = item.val.uint_;
          rmsgpack_dom_read(movie->file, &item);
+         #if DEBUG
+         RARCH_LOG("[STATESTREAM] read superblock idx %d\n",index);
+         #endif
          if(item.type != RDT_ARRAY)
          {
             RARCH_ERR("[STATESTREAM] new superblock contents type is wrong\n");
@@ -795,6 +827,9 @@ bool bsv_movie_read_deduped_state(bsv_movie_t *movie)
             RARCH_ERR("[STATESTREAM] superblock seq type is wrong\n");
             goto exit;
          }
+         #if DEBUG
+         RARCH_LOG("[STATESTREAM] read superblock seq\n");
+         #endif
          len = item.val.array.len;
          for(size_t i = 0; i < len; i++)
          {
@@ -821,6 +856,7 @@ bool bsv_movie_read_deduped_state(bsv_movie_t *movie)
          goto exit;
       default:
          RARCH_ERR("[STATESTREAM] state update chunk token value is invalid\n");
+         abort();
          goto exit;
      }
    }

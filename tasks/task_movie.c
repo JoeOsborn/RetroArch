@@ -56,8 +56,8 @@
 #define REPLAY_MAGIC       0x42535632
 
 /* Superblock and block sizes for incremental savestates. */
-#define DEFAULT_SUPERBLOCK_SIZE 256 /* measured in blocks */
-#define DEFAULT_BLOCK_SIZE      128 /* measured in bytes  */
+#define DEFAULT_SUPERBLOCK_SIZE 128 /* measured in blocks */
+#define DEFAULT_BLOCK_SIZE      64 /* measured in bytes  */
 
 /* Forward declaration */
 bool content_load_state_in_progress(void* data);
@@ -86,13 +86,13 @@ static bool bsv_movie_init_playback(bsv_movie_t *handle, const char *path)
    intfstream_read(handle->file, header, sizeof(uint32_t) * HEADER_LEN);
    if (swap_if_big32(header[MAGIC_INDEX]) != REPLAY_MAGIC)
    {
-      RARCH_ERR("%s\n", msg_hash_to_str(MSG_MOVIE_FILE_IS_NOT_A_VALID_REPLAY_FILE));
+      RARCH_ERR("%s : %s : magic %d vs %d \n", msg_hash_to_str(MSG_MOVIE_FILE_IS_NOT_A_VALID_REPLAY_FILE), path, swap_if_big32(header[MAGIC_INDEX]), REPLAY_MAGIC);
       return false;
    }
    vsn                = swap_if_big32(header[VERSION_INDEX]);
    if (vsn > REPLAY_FORMAT_VERSION)
    {
-      RARCH_ERR("%s\n", msg_hash_to_str(MSG_MOVIE_FILE_IS_NOT_A_VALID_REPLAY_FILE));
+      RARCH_ERR("%s : vsn %d vs %d\n", msg_hash_to_str(MSG_MOVIE_FILE_IS_NOT_A_VALID_REPLAY_FILE), vsn, REPLAY_FORMAT_VERSION);
       return false;
    }
    handle->version    = vsn;
@@ -224,6 +224,7 @@ static bool bsv_movie_init_record(
       intfstream_seek(handle->file, STATE_SIZE_INDEX * sizeof(uint32_t), SEEK_SET);
       intfstream_write(handle->file, &state_size, sizeof(uint32_t));
       handle->min_file_pos     = sizeof(header) + state_size;
+      RARCH_LOG("[REPLAY] min_file_pos %x = %x + %x\n", handle->min_file_pos, sizeof(header), state_size);
       handle->state_size       = state_size;
       intfstream_seek(handle->file, handle->min_file_pos, SEEK_SET);
    }
