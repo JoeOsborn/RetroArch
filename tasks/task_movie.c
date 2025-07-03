@@ -195,8 +195,8 @@ static bool bsv_movie_init_record(
          RETRO_VFS_FILE_ACCESS_WRITE | RETRO_VFS_FILE_ACCESS_READ,
          RETRO_VFS_FILE_ACCESS_HINT_NONE);
    bool is_small                = false;
-   uint32_t superblock_size     = is_small ? SMALL_SUPERBLOCK_SIZE : DEFAULT_SUPERBLOCK_SIZE;
-   uint32_t block_size          = (is_small ? SMALL_BLOCK_SIZE : DEFAULT_BLOCK_SIZE)/4;
+   uint32_t superblock_size;
+   uint32_t block_size;
 
    if (!file)
    {
@@ -215,15 +215,16 @@ static bool bsv_movie_init_record(
 
    info_size                = core_serialize_size();
    state_size               = (unsigned)info_size;
-   is_small                 = info_size < SMALL_THRESHOLD;
-
+   is_small                 = info_size < SMALL_STATE_THRESHOLD;
+   superblock_size          = is_small ? SMALL_SUPERBLOCK_SIZE : DEFAULT_SUPERBLOCK_SIZE;
+   block_size               = is_small ? SMALL_BLOCK_SIZE : DEFAULT_BLOCK_SIZE;
    header[STATE_SIZE_INDEX] = 0; /* Will fill this in later */
    handle->identifier       = (int64_t)t;
    *((int64_t *)(header+IDENTIFIER_INDEX)) = time_lil;
    intfstream_write(handle->file, header, HEADER_LEN * sizeof(uint32_t));
 
    handle->superblocks      = uint32s_index_new(superblock_size);
-   handle->blocks           = uint32s_index_new(block_size);
+   handle->blocks           = uint32s_index_new(block_size/4);
 
    if (state_size)
    {
@@ -242,8 +243,8 @@ static bool bsv_movie_init_record(
       serial_info.size = state_size;
 
       core_serialize(&serial_info);
-      superblock_size_lil = swap_if_big32(superblock_size;)
-      block_size_lil = swap_if_big32(block_size;)
+      superblock_size_lil = swap_if_big32(superblock_size);
+      block_size_lil = swap_if_big32(block_size);
       intfstream_write(handle->file, &superblock_size_lil, sizeof(uint32_t));
       intfstream_write(handle->file, &block_size_lil, sizeof(uint32_t));
       state_size = sizeof(uint32_t)*2 + bsv_movie_write_deduped_state(handle, handle->state, state_size);
@@ -272,7 +273,11 @@ static bool bsv_movie_init_record(
          printf("\n");
          exit(0);
       }
-      free(serial_info.data_const);
+      /* This is safe since the state isn't coming from the core, it's
+         from bsv_movie_read_deduped_state which necessarily allocates
+         (we can't pre-allocate the buffer, we don't know how big it
+         will need to be until starting to read. */
+      free((uint8_t *)serial_info.data_const);
 #endif
       handle->state_size       = state_size;
       intfstream_seek(handle->file, handle->min_file_pos, SEEK_SET);

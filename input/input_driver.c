@@ -6378,6 +6378,9 @@ int16_t input_driver_state_wrapper(unsigned port, unsigned device,
 
 #ifdef HAVE_BSV_MOVIE
    if (BSV_MOVIE_IS_RECORDING())
+#ifdef HAVE_REWIND
+      if (!state_manager_frame_is_reversed())
+#endif
       bsv_movie_push_input_event(
             input_st->bsv_movie_state_handle,
             port,
@@ -7200,6 +7203,9 @@ void input_keyboard_event(bool down, unsigned code,
          {
 #ifdef HAVE_BSV_MOVIE
             if (BSV_MOVIE_IS_RECORDING())
+#ifdef HAVE_REWIND
+               if (!state_manager_frame_is_reversed())
+#endif
                bsv_movie_push_key_event(
                      input_st->bsv_movie_state_handle, down, mod,
                      code, character);
