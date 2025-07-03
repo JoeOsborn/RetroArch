@@ -1058,7 +1058,7 @@ void bsv_movie_deinit_full(input_driver_state_t *input_st);
 void bsv_movie_enqueue(input_driver_state_t *input_st, bsv_movie_t *state, enum bsv_flags flags);
 
 size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t state_size);
-bool bsv_movie_read_deduped_state(bsv_movie_t *movie);
+bool bsv_movie_read_deduped_state(bsv_movie_t *movie, retro_ctx_serialize_info_t *serial_info);
 
 bool movie_start_playback(input_driver_state_t *input_st, char *path);
 bool movie_start_record(input_driver_state_t *input_st, char *path);

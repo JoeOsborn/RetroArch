@@ -2,6 +2,7 @@
 #include <string.h>
 #include <array/rhmap.h>
 #include <array/rbuf.h>
+#include "../../verbosity.h"
 
 uint32s_index_t *uint32s_index_new(size_t object_size)
 {
@@ -46,7 +47,6 @@ void uint32s_bucket_expand(struct uint32s_bucket *bucket, uint32_t idx)
    {
       bucket->contents.idxs[bucket->len] = idx;
       bucket->len++;
-      RARCH_LOG("[STATESTREAM] grow while small\n");
    }
    else if(bucket->len == 3)
    {
@@ -56,13 +56,11 @@ void uint32s_bucket_expand(struct uint32s_bucket *bucket, uint32_t idx)
       bucket->contents.vec.idxs = idxs;
       bucket->contents.vec.idxs[bucket->len] = idx;
       bucket->len++;
-      RARCH_LOG("[STATESTREAM] grow to next level\n");
    }
    else if(bucket->len < bucket->contents.vec.cap)
    {
       bucket->contents.vec.idxs[bucket->len] = idx;
       bucket->len++;
-      RARCH_LOG("[STATESTREAM] grow while big\n");
    }
    else /* bucket->len == bucket->contents.vec.cap */
    {
@@ -70,7 +68,6 @@ void uint32s_bucket_expand(struct uint32s_bucket *bucket, uint32_t idx)
       bucket->contents.vec.idxs = realloc(bucket->contents.vec.idxs, bucket->contents.vec.cap*sizeof(uint32_t));
       bucket->contents.vec.idxs[bucket->len] = idx;
       bucket->len++;
-      RARCH_LOG("[STATESTREAM] grow even bigger\n");
    }
 }
 
@@ -78,7 +75,6 @@ bool uint32s_bucket_remove(struct uint32s_bucket *bucket, uint32_t idx)
 {
    bool small = bucket->len < 4;
    uint32_t *coll = small ? bucket->contents.idxs : bucket->contents.vec.idxs;
-   RARCH_LOG("[STATESTREAM] remove %d from bucket %x len %d\n", idx, bucket, bucket->len);
    if(idx == 0) /* never remove 0s pattern */
       return false;
    for(int i = 0; i < (int)bucket->len; i++)
@@ -92,7 +88,6 @@ bool uint32s_bucket_remove(struct uint32s_bucket *bucket, uint32_t idx)
          }
          else
             memmove((uint8_t*)(coll+i), (uint8_t*)(coll+i+1), (bucket->len-(i+1))*sizeof(uint32_t));
-         RARCH_LOG("[STATESTREAM] removed idx %d\n", idx);
          bucket->len--;
          return true;
       }
@@ -107,13 +102,6 @@ uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *o
    uint32s_insert_result_t result;
    size_t size_bytes = index->object_size * sizeof(uint32_t);
    uint32_t hash = uint32s_hash_bytes((uint8_t *)object, size_bytes);
-   #if 0
-   RARCH_LOG("[STATESTREAM] hash %x obj ", hash);
-   for(int i = 0; i < index->object_size; i++) {
-      printf("%x",object[i]);
-   }
-   printf("\n");
-   #endif
    uint32_t idx;
    uint32_t *copy, *check;
    uint32_t additions_len = RBUF_LEN(index->additions);
@@ -125,10 +113,8 @@ uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *o
       if(uint32s_bucket_get(index, bucket, object, size_bytes, &result.index))
       {
          result.is_new = false;
-         /*RARCH_LOG("[STATESTREAM] result %d new: 0\n", result.index);*/
          return result;
       }
-      /*RARCH_LOG("[STATESTREAM] expand into existing bucket\n");*/
       idx = RBUF_LEN(index->objects);
       copy = malloc(size_bytes);
       memcpy(copy, object, size_bytes);
@@ -159,7 +145,6 @@ uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *o
       addition.first_index = result.index;
       RBUF_PUSH(index->additions, addition);
    }
-   /* RARCH_LOG("[STATESTREAM] result %d new: %d\n", result.index, result.is_new); */
    return result;
 }
 
@@ -226,9 +211,8 @@ void uint32s_index_remove_after(uint32s_index_t *index, uint64_t frame)
    for(i = RBUF_LEN(index->additions)-1; i >= 0; i--)
    {
       struct uint32s_frame_addition add = index->additions[i];
-      if(add.frame_counter < frame)
+      if(add.frame_counter <= frame)
          break;
-      RARCH_LOG("[STATESTREAM] remove idxs after %d at frame %d/%d (add idx %d) (obj len %d)\n", add.first_index, add.frame_counter, frame, i, RBUF_LEN(index->objects));
       while(add.first_index < RBUF_LEN(index->objects))
          uint32s_index_pop(index);
    }
