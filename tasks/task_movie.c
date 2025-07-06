@@ -252,7 +252,7 @@ static bool bsv_movie_init_record(
       state_size_lil = swap_if_big32(state_size);
       intfstream_write(handle->file, &state_size_lil, sizeof(uint32_t));
       handle->min_file_pos = sizeof(header) + state_size;
-#if DEBUG
+#if 0 
       serial_info.data_const = NULL;
       intfstream_seek(handle->file, sizeof(header)+8, SEEK_SET);
       uint32s_index_clear(handle->blocks);

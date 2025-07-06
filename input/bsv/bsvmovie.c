@@ -1,4 +1,5 @@
 #include <retro_endianness.h>
+#include <compat/zlib/zlib.h>
 #include "../../retroarch.h"
 #include "../../state_manager.h"
 #include "../../verbosity.h"
@@ -602,6 +603,7 @@ size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t 
    static uint32_t total_checkpoints = 0;
    static uint64_t total_bytes_input = 0;
    static uint64_t total_bytes_written = 0;
+   static uint64_t total_bytes_encoded = 0;
    static retro_perf_tick_t total_encode_micros = 0;
    retro_perf_tick_t start = cpu_features_get_time_usec();
    size_t block_size = movie->blocks->object_size;
@@ -613,10 +615,14 @@ size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t 
    uint32_t *superblock_buf = calloc(superblock_size, sizeof(uint32_t));
    uint8_t *padded_block = NULL;
    size_t write_start = intfstream_tell(movie->file);
-
-   rmsgpack_write_int(movie->file, BSV_IFRAME_START_TOKEN);
-   rmsgpack_write_int(movie->file, movie->frame_counter);
-   rmsgpack_write_int(movie->file, state_size);
+   // big hack
+   uint8_t *compress_buffer = calloc(state_size, sizeof(uint8_t));
+   intfstream_t *mem_stream = intfstream_open_writable_memory(compress_buffer,          RETRO_VFS_FILE_ACCESS_WRITE,
+         RETRO_VFS_FILE_ACCESS_HINT_NONE,
+         state_size);
+   rmsgpack_write_int(mem_stream, BSV_IFRAME_START_TOKEN);
+   rmsgpack_write_int(mem_stream, movie->frame_counter);
+   rmsgpack_write_int(mem_stream, state_size);
    for(size_t superblock = 0; superblock < superblock_count; superblock++)
    {
       uint32s_insert_result_t found_block;
@@ -651,9 +657,9 @@ size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t 
          if(found_block.is_new)
          {
             /* write "here is a new block" and new block to file */
-            rmsgpack_write_int(movie->file, BSV_IFRAME_NEW_BLOCK_TOKEN);
-            rmsgpack_write_int(movie->file, found_block.index);
-            rmsgpack_write_bin(movie->file, state+block_start, block_byte_size);
+            rmsgpack_write_int(mem_stream, BSV_IFRAME_NEW_BLOCK_TOKEN);
+            rmsgpack_write_int(mem_stream, found_block.index);
+            rmsgpack_write_bin(mem_stream, state+block_start, block_byte_size);
          }
          else
             reused_blocks++;
@@ -663,31 +669,44 @@ size_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t 
       if(found_block.is_new)
       {
          /* write "here is a new superblock" and new superblock to file */
-         rmsgpack_write_int(movie->file, BSV_IFRAME_NEW_SUPERBLOCK_TOKEN);
-         rmsgpack_write_int(movie->file, found_block.index);
-         rmsgpack_write_array_header(movie->file, superblock_size);
+         rmsgpack_write_int(mem_stream, BSV_IFRAME_NEW_SUPERBLOCK_TOKEN);
+         rmsgpack_write_int(mem_stream, found_block.index);
+         rmsgpack_write_array_header(mem_stream, superblock_size);
          for(uint32_t i = 0; i < superblock_size; i++)
-            rmsgpack_write_int(movie->file, superblock_buf[i]);
+            rmsgpack_write_int(mem_stream, superblock_buf[i]);
       }
       else
          reused_superblocks++;
       superblock_seq[superblock] = found_block.index;
    }
    /* write "here is the superblock seq" and superblock seq to file */
-   rmsgpack_write_int(movie->file, BSV_IFRAME_SUPERBLOCK_SEQ_TOKEN);
-   rmsgpack_write_array_header(movie->file, superblock_count);
+   rmsgpack_write_int(mem_stream, BSV_IFRAME_SUPERBLOCK_SEQ_TOKEN);
+   rmsgpack_write_array_header(mem_stream, superblock_count);
    for(uint32_t i = 0; i < superblock_count; i++)
-       rmsgpack_write_int(movie->file, superblock_seq[i]);
+       rmsgpack_write_int(mem_stream, superblock_seq[i]);
    free(superblock_buf);
    free(superblock_seq);
    if(padded_block)
      free(padded_block);
+   size_t compbound = compressBound(intfstream_tell(mem_stream));
+   uint8_t *compressed_data = calloc(compbound, sizeof(uint8_t));
+   printf("compbound %ld\n",compbound);
+   printf("\n");
+   compress(compressed_data, &compbound,
+            compress_buffer, intfstream_tell(mem_stream));
+   printf("compressed size %ld\n",compbound);
+   intfstream_write(movie->file, compressed_data, compbound);
+   size_t write_end = intfstream_tell(movie->file);
    total_checkpoints++;
    total_encode_micros += cpu_features_get_time_usec() - start;
    total_bytes_input += state_size;
-   total_bytes_written += intfstream_tell(movie->file) - write_start;
-   RARCH_LOG("[STATESTREAM] Encode stats at checkpoint %d: %d blocks (%d reused); %d superblocks (%d reused); unencoded size (KB) %d, encoded size (KB) %d; net time (secs) %f\n", total_checkpoints, total_blocks, reused_blocks, total_superblocks, reused_superblocks, total_bytes_input/1024, total_bytes_written/1024, ((float)total_encode_micros) / 1000000.0);
-   return intfstream_tell(movie->file) - write_start;
+   total_bytes_encoded += intfstream_tell(mem_stream);
+   total_bytes_written += write_end-write_start;
+   RARCH_LOG("[STATESTREAM] Encode stats at checkpoint %d: %d blocks (%d reused); %d superblocks (%d reused); unencoded size (KB) %d, encoded size (KB) %d; written size %d; net time (secs) %f\n", total_checkpoints, total_blocks, reused_blocks, total_superblocks, reused_superblocks, total_bytes_input/1024, total_bytes_encoded/1024, total_bytes_written/1024, ((float)total_encode_micros) / 1000000.0);
+   free(compressed_data);
+   intfstream_close(mem_stream);
+   free(compress_buffer);
+   return write_end - write_start;
 }
 
 bool bsv_movie_read_deduped_state(bsv_movie_t *movie, retro_ctx_serialize_info_t *serial_info)
