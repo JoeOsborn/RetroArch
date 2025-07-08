@@ -220,7 +220,7 @@ static bool rzipstream_init_stream(
    {
       /* Written files are always compressed */
       stream->is_compressed = true;
-      file_mode             = RETRO_VFS_FILE_ACCESS_WRITE;
+      file_mode             = RETRO_VFS_FILE_ACCESS_READ | RETRO_VFS_FILE_ACCESS_WRITE;
    }
    /* For read files, must get compression status
     * from file itself... */
@@ -257,6 +257,13 @@ static bool rzipstream_init_stream(
          return false;
 
       if (!(stream->deflate_stream = stream->deflate_backend->stream_new()))
+         return false;
+
+      /* Decompression for seeking */
+      if (!(stream->inflate_backend = trans_stream_get_zlib_inflate_backend()))
+         return false;
+
+      if (!(stream->inflate_stream = stream->inflate_backend->stream_new()))
          return false;
 
       /* Set compression level */
@@ -386,8 +393,8 @@ rzipstream_t* rzipstream_open(const char *path, unsigned mode)
     * > Only RETRO_VFS_FILE_ACCESS_READ and
     *   RETRO_VFS_FILE_ACCESS_WRITE are supported */
    if (string_is_empty(path)
-       || (   (mode != RETRO_VFS_FILE_ACCESS_READ)
-           && (mode != RETRO_VFS_FILE_ACCESS_WRITE)))
+       || !(mode & (RETRO_VFS_FILE_ACCESS_READ | 
+                    RETRO_VFS_FILE_ACCESS_WRITE)))
       return NULL;
 
    /* If opening in read mode, ensure file exists */
@@ -420,7 +427,7 @@ rzipstream_t* rzipstream_open(const char *path, unsigned mode)
    /* Initialise stream */
    if (!rzipstream_init_stream(
          stream, path,
-         (mode == RETRO_VFS_FILE_ACCESS_WRITE)))
+         (mode & RETRO_VFS_FILE_ACCESS_WRITE)))
    {
       rzipstream_free_stream(stream);
       return NULL;
@@ -514,7 +521,7 @@ static bool rzipstream_read_chunk(rzipstream_t *stream)
     * and reset pointer */
    stream->out_buf_occupancy = inflate_written;
    stream->out_buf_ptr       = 0;
-
+   // todo swap in and out buf when in write mode, and be sure to set lengths/capacities
    return true;
 }
 
@@ -556,10 +563,8 @@ static bool rzipstream_scan_to_chunk(rzipstream_t *stream, uint32_t chunk_number
       filestream_seek(stream->file, compressed_chunk_size, SEEK_CUR);
       current_chunk++;
    }
-   // TODO initialize inflate_stream/inflate_backend if in write mode and not initialized; or add an rzipstream_read_written_chunk(stream)
    /* now read the requested chunk */
    rzipstream_read_chunk(stream);
-   // TODO in write mode, swap the in/out buffers (since in should be uncompressed and out should be compressed)
    return true;
 }
 
@@ -936,7 +941,7 @@ bool rzipstream_write_file(const char *path, const void *data, int64_t len)
       return false;
 
    /* Attempt to open file */
-   if (!(stream = rzipstream_open(path, RETRO_VFS_FILE_ACCESS_READ | RETRO_VFS_FILE_ACCESS_WRITE)))
+   if (!(stream = rzipstream_open(path, RETRO_VFS_FILE_ACCESS_WRITE)))
       return false;
 
    /* Write contents of data buffer to file */
