@@ -517,11 +517,20 @@ static bool rzipstream_read_chunk(rzipstream_t *stream)
        || (inflate_written > stream->out_buf_size))
       return false;
 
-   /* Record current output buffer occupancy
-    * and reset pointer */
-   stream->out_buf_occupancy = inflate_written;
-   stream->out_buf_ptr       = 0;
-   // todo swap in and out buf when in write mode, and be sure to set lengths/capacities
+   if (stream->is_writing)
+   {
+      uint8_t *tmp = stream->in_buf;
+      stream->out_buf = stream->in_buf;
+      stream->in_buf = tmp;
+      stream->in_buf_ptr = 0;
+   }
+   else
+   {
+      /* Record current output buffer occupancy
+       * and reset pointer */
+      stream->out_buf_occupancy = inflate_written;
+      stream->out_buf_ptr       = 0;
+   }
    return true;
 }
 
@@ -1063,7 +1072,11 @@ int64_t rzipstream_seek_virtual(rzipstream_t *stream,
       return -1;
    ptr_chunk = ptr / stream->chunk_size;
    rzipstream_scan_to_chunk(stream, ptr_chunk);
-   // update virtual_ptr and either the in_ptr or out_ptr depending on whether we're writing or reading
+   stream->virtual_ptr = ptr;
+   if (stream->is_writing)
+      stream->in_buf_ptr = ptr % stream->chunk_size;
+   else
+      stream->out_buf_ptr = ptr % stream->chunk_size;
    return stream->virtual_ptr;
 }
 
