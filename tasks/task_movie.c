@@ -67,9 +67,14 @@ static bool bsv_movie_init_playback(
    uint32_t state_size         = 0;
    uint32_t header[HEADER_LEN] = {0};
    uint32_t vsn                = 0;
-   intfstream_t *file          = intfstream_open_file(path,
-         RETRO_VFS_FILE_ACCESS_READ,
-         RETRO_VFS_FILE_ACCESS_HINT_NONE);
+#if defined(HAVE_ZLIB)
+      /* Always use RZIP interface when reading state
+       * files - this will automatically handle uncompressed
+       * data */
+   intfstream_t *file = intfstream_open_rzip_file(path, RETRO_VFS_FILE_ACCESS_READ);
+#else
+   intfstream_t *file = intfstream_open_file(path, RETRO_VFS_FILE_ACCESS_READ, RETRO_VFS_FILE_ACCESS_HINT_NONE);
+#endif
 
    if (!file)
    {
@@ -154,9 +159,13 @@ static bool bsv_movie_init_record(
    uint32_t state_size          = 0;
    uint32_t content_crc         = 0;
    uint32_t header[HEADER_LEN] = {0};
-   intfstream_t *file           = intfstream_open_file(path,
-         RETRO_VFS_FILE_ACCESS_WRITE | RETRO_VFS_FILE_ACCESS_READ,
-         RETRO_VFS_FILE_ACCESS_HINT_NONE);
+   intfstream_t *file;
+#if defined(HAVE_ZLIB)
+   if (settings->bools.savestate_file_compression)
+      file = intfstream_open_rzip_file(path, RETRO_VFS_FILE_ACCESS_WRITE | RETRO_VFS_FILE_ACCESS_READ);
+   else
+#endif
+      file = intfstream_open_file(path, RETRO_VFS_FILE_ACCESS_WRITE | RETRO_VFS_FILE_ACCESS_READ, RETRO_VFS_FILE_ACCESS_HINT_NONE);
 
    if (!file)
    {
