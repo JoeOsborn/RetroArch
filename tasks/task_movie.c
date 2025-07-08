@@ -158,7 +158,8 @@ static bool bsv_movie_init_record(
    time_t time_lil              = swap_if_big64(t);
    uint32_t state_size          = 0;
    uint32_t content_crc         = 0;
-   uint32_t header[HEADER_LEN] = {0};
+   uint32_t header[HEADER_LEN]  = {0};
+   settings_t *settings         = config_get_ptr();
    intfstream_t *file;
 #if defined(HAVE_ZLIB)
    if (settings->bools.savestate_file_compression)
