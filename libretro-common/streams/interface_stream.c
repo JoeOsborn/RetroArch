@@ -270,29 +270,25 @@ error:
 int64_t intfstream_seek(
       intfstream_internal_t *intf, int64_t offset, int whence)
 {
+   int seek_position = 0;
    if (!intf)
       return -1;
-
+   switch (whence)
+   {
+   case SEEK_SET:
+     seek_position = RETRO_VFS_SEEK_POSITION_START;
+     break;
+   case SEEK_CUR:
+     seek_position = RETRO_VFS_SEEK_POSITION_CURRENT;
+     break;
+   case SEEK_END:
+     seek_position = RETRO_VFS_SEEK_POSITION_END;
+     break;
+   }
    switch (intf->type)
    {
       case INTFSTREAM_FILE:
-         {
-            int seek_position = 0;
-            switch (whence)
-            {
-               case SEEK_SET:
-                  seek_position = RETRO_VFS_SEEK_POSITION_START;
-                  break;
-               case SEEK_CUR:
-                  seek_position = RETRO_VFS_SEEK_POSITION_CURRENT;
-                  break;
-               case SEEK_END:
-                  seek_position = RETRO_VFS_SEEK_POSITION_END;
-                  break;
-            }
-            return (int64_t)filestream_seek(intf->file.fp, (int64_t)offset,
-                  seek_position);
-         }
+         return (int64_t)filestream_seek(intf->file.fp, (int64_t)offset, seek_position);
       case INTFSTREAM_MEMORY:
          return (int64_t)memstream_seek(intf->memory.fp, offset, whence);
       case INTFSTREAM_CHD:
@@ -302,8 +298,11 @@ int64_t intfstream_seek(
          break;
 #endif
       case INTFSTREAM_RZIP:
-         /* Unsupported */
+#ifdef HAVE_ZLIB
+         return (int64_t)rzipstream_seek_virtual(intf->rzip.fp, (int64_t)offset, seek_position);
+#else
          break;
+#endif
    }
 
    return -1;
@@ -323,6 +322,11 @@ int64_t intfstream_truncate(intfstream_internal_t *intf, uint64_t len)
       case INTFSTREAM_CHD:
          break;
       case INTFSTREAM_RZIP:
+#ifdef HAVE_ZLIB
+         if (rzipstream_tell(intf->rzip.fp) != len)
+            return -1;
+         return rzipstream_truncate_virtual(intf->rzip.fp);
+#endif
          break;
    }
 

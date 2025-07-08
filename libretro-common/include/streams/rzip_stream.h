@@ -154,6 +154,15 @@ bool rzipstream_write_file(const char *path, const void *data, int64_t len);
  * at the end (harmless, but a waste of space). */
 void rzipstream_rewind(rzipstream_t *stream);
 
+/* Sets file position to the specified virtual pointer location. Note:
+   seeks backward in a file open for writing should be followed by a
+   truncate to avoid garbage data. */
+int64_t rzipstream_seek_virtual(rzipstream_t *stream,
+      int64_t offset, int whence);
+
+/* Truncates file after the current virtual pointer location. */
+int64_t rzipstream_truncate_virtual(rzipstream_t *stream);
+
 /* File Status */
 
 /* Returns total size (in bytes) of the *uncompressed*
