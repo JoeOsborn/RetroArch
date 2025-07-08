@@ -549,7 +549,7 @@ static bool rzipstream_scan_to_chunk(rzipstream_t *stream, uint32_t chunk_number
       return true;
    if (chunk_number < current_chunk)
    {
-      rzipstream_rewind(stream);
+      filestream_seek(stream->file, RZIP_HEADER_SIZE, SEEK_SET);
       current_chunk = 0;
    }
    for (i = 0; i < RZIP_CHUNK_HEADER_SIZE; i++)
