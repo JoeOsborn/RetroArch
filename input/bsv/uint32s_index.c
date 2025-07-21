@@ -7,7 +7,7 @@
 #define XXH_INLINE_ALL
 #include <xxHash/xxhash.h>
 
-#define HASHMAP_CAP 1048576
+#define HASHMAP_CAP (1<<16)
 
 uint32s_index_t *uint32s_index_new(size_t object_size)
 {
@@ -110,6 +110,13 @@ uint32s_insert_result_t uint32s_index_insert(uint32s_index_t *index, uint32_t *o
    uint32_t additions_len = RBUF_LEN(index->additions);
    result.index = 0;
    result.is_new = false;
+
+   /*
+     TODO: just insert into objects and additions?
+           add a commit() method that takes the objects in between the last addition and the current one and promotes them into the hashmap IF their counts are bigger than 1, otherwise deletes their storage.
+           searches should first check against the objects in the last two additions to avoid the cost of hashing
+    */
+   
    if(RHMAP_HAS(index->index, hash))
    {
       bucket = RHMAP_PTR(index->index, hash);

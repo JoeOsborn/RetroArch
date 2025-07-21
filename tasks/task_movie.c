@@ -51,7 +51,7 @@
 
 /* Superblock and block sizes for incremental savestates. */
 #define DEFAULT_SUPERBLOCK_SIZE 256 /* measured in blocks */
-#define DEFAULT_BLOCK_SIZE      1024 /* measured in bytes  */
+#define DEFAULT_BLOCK_SIZE      512 /* measured in bytes  */
 
 #define SMALL_STATE_THRESHOLD (1<<20) /* states < 1MB are "small" and are tuned differently */
 #define SMALL_SUPERBLOCK_SIZE 32  /* measured in blocks */
@@ -214,6 +214,7 @@ static bool bsv_movie_init_record(
       uint8_t compression = REPLAY_CHECKPOINT2_COMPRESSION_NONE;
 #endif
       uint8_t encoding    = REPLAY_CHECKPOINT2_ENCODING_STATESTREAM;
+      compression = REPLAY_CHECKPOINT2_COMPRESSION_NONE;
       if (!st)
          return false;
 

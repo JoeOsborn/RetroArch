@@ -151,6 +151,7 @@ void bsv_movie_frame_rewind()
          uint8_t compression = REPLAY_CHECKPOINT2_COMPRESSION_NONE;
 #endif
          uint8_t encoding    = REPLAY_CHECKPOINT2_ENCODING_STATESTREAM;
+         compression    = REPLAY_CHECKPOINT2_COMPRESSION_NONE;
          /* If recording, we simply reset
           * the starting point. Nice and easy. */
          uint32s_index_clear(handle->superblocks);
@@ -653,7 +654,7 @@ void bsv_movie_next_frame(input_driver_state_t *input_st)
       /* Maybe record checkpoint */
       if (     (checkpoint_interval != 0)
             && (handle->frame_counter > 0)
-            && (handle->frame_counter % (checkpoint_interval*60) == 0))
+            && (handle->frame_counter % (checkpoint_interval * 20) == 0))
       {
          uint8_t frame_tok   = REPLAY_TOKEN_CHECKPOINT2_FRAME;
          retro_ctx_serialize_info_t serial_info;
@@ -665,6 +666,7 @@ void bsv_movie_next_frame(input_driver_state_t *input_st)
          uint8_t compression = REPLAY_CHECKPOINT2_COMPRESSION_NONE;
 #endif
          uint8_t encoding    = REPLAY_CHECKPOINT2_ENCODING_STATESTREAM;
+         compression    = REPLAY_CHECKPOINT2_COMPRESSION_NONE;
          size_t len          = core_serialize_size();
          uint8_t *st         = (uint8_t*)malloc(len);
          serial_info.data    = st;
@@ -1065,6 +1067,8 @@ int64_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t
    static uint64_t total_bytes_input = 0;
    static uint64_t total_bytes_written = 0;
    static retro_perf_tick_t total_encode_micros = 0;
+   static uint8_t *last_state;
+   static size_t last_state_size;
    retro_perf_tick_t start = cpu_features_get_time_usec();
    size_t block_size = movie->blocks->object_size;
    size_t block_byte_size = movie->blocks->object_size*4;
@@ -1078,15 +1082,40 @@ int64_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t
    int64_t encoded_size;
    size_t superblock, block;
    uint32_t i;
-
-   printf("Output cp for frame %ld\n",movie->frame_counter);
-
+   /* Try to keep hashtable occupancy low so it works quickly.  This
+      trades off some file size for the few blocks that are frequently
+      used, but most blocks are only used once so purging them is
+      actually desirable from a memory use perspective.  Keeping
+      indices low also helps take advantage of rmsgpack's variable
+      length int encoding.
+   */
+   /* if (uint32s_index_count(movie->blocks) > 262144 || uint32s_index_count(movie->superblocks) > 262144) */
+   /* { */
+   /*    uint32s_index_clear(movie->blocks); */
+   /*    uint32s_index_clear(movie->superblocks); */
+   /* } */
+   if (last_state_size != state_size)
+      {
+         free(last_state);
+         last_state = NULL;
+      }
    rmsgpack_write_int(out_stream, BSV_IFRAME_START_TOKEN);
    rmsgpack_write_int(out_stream, movie->frame_counter);
    for(superblock = 0; superblock < superblock_count; superblock++)
    {
       uint32s_insert_result_t found_block;
       total_superblocks++;
+      if (last_state)
+         {
+            if (memcmp(last_state+(superblock*superblock_byte_size), state+(superblock*superblock_byte_size), superblock_byte_size) == 0)
+               {
+                  reused_blocks += superblock_size;
+                  reused_superblocks++;
+                  found_block = uint32s_index_insert(movie->superblocks, superblock_buf, movie->frame_counter);
+                  superblock_seq[superblock] = found_block.index;
+                  continue;
+               }
+         }
       for(block = 0; block < superblock_size; block++)
       {
          size_t block_start = superblock*superblock_byte_size+block*block_byte_size;
@@ -1139,6 +1168,13 @@ int64_t bsv_movie_write_deduped_state(bsv_movie_t *movie, uint8_t *state, size_t
          reused_superblocks++;
       superblock_seq[superblock] = found_block.index;
    }
+
+   if(!last_state)
+      {
+         last_state = malloc(state_size);
+         last_state_size = state_size;
+      }
+   memcpy(last_state, state, state_size);
    /* write "here is the superblock seq" and superblock seq to file */
    rmsgpack_write_int(out_stream, BSV_IFRAME_SUPERBLOCK_SEQ_TOKEN);
    rmsgpack_write_array_header(out_stream, superblock_count);
