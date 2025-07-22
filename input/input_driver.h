@@ -238,11 +238,9 @@ typedef struct bsv_input_data bsv_input_data_t;
 struct bsv_movie
 {
    intfstream_t *file;
-   uint8_t *state;
    int64_t identifier;
    uint32_t version;
    size_t min_file_pos;
-   size_t state_size;
 
    /* A ring buffer keeping track of positions
     * in the file for each frame. */
@@ -264,6 +262,10 @@ struct bsv_movie
    /* Block index and superblock index for incremental checkpoints */
    uint32s_index_t *superblocks;
    uint32s_index_t *blocks;
+
+   /* Current and previous raw and encoded savestates for delta encoding/faster incremental checkpoints. */
+   uint8_t *last_save, *cur_save, *last_enc_save, *cur_enc_save;
+   size_t raw_state_size, enc_state_size, enc_state_capacity;
 };
 
 typedef struct bsv_movie bsv_movie_t;

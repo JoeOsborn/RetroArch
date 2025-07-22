@@ -33,13 +33,12 @@ void bsv_movie_push_key_event(bsv_movie_t *movie,
                               uint8_t down, uint16_t mod, uint32_t code, uint32_t character);
 void bsv_movie_push_input_event(bsv_movie_t *movie,
                                 uint8_t port, uint8_t dev, uint8_t idx, uint16_t id, int16_t val);
-
+bool bsv_movie_reset_recording(bsv_movie_t *movie);
 bool bsv_movie_load_checkpoint(bsv_movie_t *movie,
       uint8_t compression, uint8_t encoding,
       bool just_update_structures);
 int64_t bsv_movie_write_checkpoint(bsv_movie_t *movie,
-      uint8_t compression, uint8_t encoding,
-      retro_ctx_serialize_info_t serial_info);
+      uint8_t compression, uint8_t encoding);
 
 RETRO_END_DECLS
 
