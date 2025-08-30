@@ -128,7 +128,7 @@ static void *al_init(const char *device, unsigned rate, unsigned latency,
          int32_t idx_found = -1;
          if (list->elems)
          {
-            size_t i;
+            unsigned int i;
             for (i = 0; i < list->size; i++)
             {
                if (string_is_equal(device, list->elems[i].data))
@@ -144,7 +144,7 @@ static void *al_init(const char *device, unsigned rate, unsigned latency,
 
             if (idx_found == -1 && isdigit(device[0]))
             {
-               idx_found = strtoul(device, NULL, 0);
+               idx_found = (int32_t)(strtoul(device, NULL, 0));
                RARCH_LOG("[OpenAL] Fallback, device index is a single number index instead: %d.\n", idx_found);
 
                if (idx_found != -1)
@@ -190,7 +190,7 @@ static void *al_init(const char *device, unsigned rate, unsigned latency,
       _latency        = latency * rate * 2 * sizeof(int16_t);
    }
 
-   al->num_buffers = _latency / (1000 * OPENAL_BUFSIZE);
+   al->num_buffers = (ALsizei)(_latency / (1000 * OPENAL_BUFSIZE));
    if (al->num_buffers < 2)
       al->num_buffers = 2;
 
@@ -262,7 +262,7 @@ static ssize_t al_write(void *data, const void *s, size_t len)
    {
       ALint val;
       ALuint buffer;
-      size_t rc    = MIN(OPENAL_BUFSIZE, len);
+      ALsizei rc    = MIN(OPENAL_BUFSIZE, (ALsizei)len);
 
       if (!al_get_buffer(al, &buffer))
          break;

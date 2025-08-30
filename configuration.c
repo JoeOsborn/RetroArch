@@ -5194,7 +5194,7 @@ const char *input_config_get_prefix(unsigned user, bool meta)
  */
 static void input_config_save_keybinds_user(config_file_t *conf, unsigned user)
 {
-   size_t i = 0;
+   unsigned int i = 0;
    for (i = 0; input_config_bind_map_get_valid(i); i++)
    {
       char key[64];
@@ -5237,7 +5237,7 @@ static void input_config_save_keybinds_user_override(config_file_t *conf,
       unsigned user, unsigned bind_id,
       const struct retro_keybind *override_bind)
 {
-   size_t i = bind_id;
+   unsigned int i = bind_id;
 
    if (input_config_bind_map_get_valid(i))
    {

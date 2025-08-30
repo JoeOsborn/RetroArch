@@ -3767,9 +3767,7 @@ static void ozone_thumbnail_bar_hide_end(void *userdata)
 
 static bool ozone_is_main_menu_playlist(void *userdata)
 {
-   ozone_handle_t *ozone      = (ozone_handle_t*)userdata;
    menu_entry_t entry;
-
    MENU_ENTRY_INITIALIZE(entry);
    menu_entry_get(&entry, 0, 0, NULL, true);
    return entry.type == FILE_TYPE_RPL_ENTRY;
@@ -7161,7 +7159,7 @@ static void ozone_draw_messagebox(
       const char *message,
       math_matrix_4x4 *mymat)
 {
-   size_t x, y;
+   unsigned int x, y;
    char wrapped_message[MENU_LABEL_MAX_LENGTH];
    int longest_width        = 0;
    int usable_width         = 0;

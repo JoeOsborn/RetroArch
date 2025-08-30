@@ -943,7 +943,6 @@ static AudioDeviceID get_macos_device_id_for_uid_or_name(const char *uid_or_name
    for (UInt32 i = 0; i < num_devices; i++)
    {
       AudioDeviceID current_device_id = all_devices[i];
-      UInt32 input_stream_count = 0;
       AudioObjectPropertyAddress prop_addr_streams_input = {
          kAudioDevicePropertyStreams,
          kAudioDevicePropertyScopeInput,
@@ -984,7 +983,6 @@ static AudioDeviceID get_macos_device_id_for_uid_or_name(const char *uid_or_name
    for (UInt32 i = 0; i < num_devices; i++)
    {
       AudioDeviceID current_device_id = all_devices[i];
-      UInt32 input_stream_count = 0;
       AudioObjectPropertyAddress prop_addr_streams_input = {
          kAudioDevicePropertyStreams,
          kAudioDevicePropertyScopeInput,

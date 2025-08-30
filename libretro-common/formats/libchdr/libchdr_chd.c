@@ -817,14 +817,14 @@ static chd_error decompress_v5_map(chd_file* chd, chd_header* header)
 	{
 		uint8_t *rawmap = header->rawmap + (hunknum * 12);
 		if (repcount > 0)
-			rawmap[0] = lastcomp, repcount--;
+         (void)(rawmap[0] = lastcomp), repcount--;
 		else
 		{
 			uint8_t val = huffman_decode_one(decoder, bitbuf);
 			if (val == COMPRESSION_RLE_SMALL)
-				rawmap[0] = lastcomp, repcount = 2 + huffman_decode_one(decoder, bitbuf);
+            (void)(rawmap[0] = lastcomp), repcount = 2 + huffman_decode_one(decoder, bitbuf);
 			else if (val == COMPRESSION_RLE_LARGE)
-				rawmap[0] = lastcomp, repcount = 2 + 16 + (huffman_decode_one(decoder, bitbuf) << 4), repcount += huffman_decode_one(decoder, bitbuf);
+            (void)(rawmap[0] = lastcomp), (void)(repcount = 2 + 16 + (huffman_decode_one(decoder, bitbuf) << 4)), repcount += huffman_decode_one(decoder, bitbuf);
 			else
 				rawmap[0] = lastcomp = val;
 		}
@@ -1511,7 +1511,7 @@ CHD_EXPORT chd_error chd_get_metadata(chd_file *chd, uint32_t searchtag, uint32_
 {
 	metadata_entry metaentry;
 	chd_error err;
-	uint32_t count;
+	size_t count;
 
 	/* if we didn't find it, just return */
 	err = metadata_find_entry(chd, searchtag, searchindex, &metaentry);
@@ -1683,7 +1683,7 @@ static uint32_t header_guess_unitbytes(chd_file *chd)
 static chd_error header_read(chd_file *chd, chd_header *header)
 {
 	uint8_t rawheader[CHD_MAX_HEADER_SIZE];
-	uint32_t count;
+	size_t count;
 
 	/* punt if NULL */
 	if (header == NULL)
@@ -1795,7 +1795,7 @@ static chd_error header_read(chd_file *chd, chd_header *header)
 		header->hunkbytes       = get_bigendian_uint32_t(&rawheader[56]);
 		if (header->hunkbytes == 0)
 			return CHDERR_INVALID_DATA;
-		header->hunkcount       = (header->logicalbytes + header->hunkbytes - 1) / header->hunkbytes;
+		header->hunkcount       = (uint32_t)((header->logicalbytes + header->hunkbytes - 1) / header->hunkbytes);
 		header->unitbytes       = get_bigendian_uint32_t(&rawheader[60]);
 		if (header->unitbytes == 0)
 			return CHDERR_INVALID_DATA;
@@ -1974,11 +1974,11 @@ static chd_error hunk_read_into_memory(chd_file *chd, uint32_t hunknum, uint8_t 
 				if (chd->cachehunk == entry->offset && dest == chd->cache)
 					break;
 #endif
-				return hunk_read_into_memory(chd, entry->offset, dest);
+				return hunk_read_into_memory(chd, (uint32_t)entry->offset, dest);
 
 			/* parent-referenced data */
 			case V34_MAP_ENTRY_TYPE_PARENT_HUNK:
-				err = hunk_read_into_memory(chd->parent, entry->offset, dest);
+				err = hunk_read_into_memory(chd->parent, (uint32_t)entry->offset, dest);
 				if (err != CHDERR_NONE)
 					return err;
 				break;
@@ -2112,7 +2112,7 @@ static chd_error hunk_read_into_memory(chd_file *chd, uint32_t hunknum, uint8_t 
 				return CHDERR_NONE;
 
 			case COMPRESSION_SELF:
-				return hunk_read_into_memory(chd, blockoffs, dest);
+				return hunk_read_into_memory(chd, (uint32_t)blockoffs, dest);
 
 			case COMPRESSION_PARENT:
 			{
@@ -2123,20 +2123,20 @@ static chd_error hunk_read_into_memory(chd_file *chd, uint32_t hunknum, uint8_t 
 
 				/* blockoffs is aligned to units_in_hunk */
 				if (blockoffs % units_in_hunk == 0) {
-					return hunk_read_into_memory(chd->parent, blockoffs / units_in_hunk, dest);
+					return hunk_read_into_memory(chd->parent, (uint32_t)(blockoffs / units_in_hunk), dest);
 				/* blockoffs is not aligned to units_in_hunk */
 				} else {
 					uint32_t unit_in_hunk = blockoffs % units_in_hunk;
 					uint8_t *buf = malloc(chd->header.hunkbytes);
 					/* Read first half of hunk which contains blockoffs */
-					err = hunk_read_into_memory(chd->parent, blockoffs / units_in_hunk, buf);
+					err = hunk_read_into_memory(chd->parent, (uint32_t)(blockoffs / units_in_hunk), buf);
 					if (err != CHDERR_NONE) {
 						free(buf);
 						return err;
 					}
 					memcpy(dest, buf + unit_in_hunk * chd->header.unitbytes, (units_in_hunk - unit_in_hunk) * chd->header.unitbytes);
 					/* Read second half of hunk which contains blockoffs */
-					err = hunk_read_into_memory(chd->parent, (blockoffs / units_in_hunk) + 1, buf);
+					err = hunk_read_into_memory(chd->parent, (uint32_t)((blockoffs / units_in_hunk) + 1), buf);
 					if (err != CHDERR_NONE) {
 						free(buf);
 						return err;
@@ -2167,7 +2167,7 @@ static chd_error map_read(chd_file *chd)
 	uint8_t raw_map_entries[MAP_STACK_ENTRIES * MAP_ENTRY_SIZE];
 	uint64_t fileoffset, maxoffset = 0;
 	uint8_t cookie[MAP_ENTRY_SIZE];
-	uint32_t count;
+	size_t count;
 	chd_error err;
 	uint32_t i;
 
@@ -2256,7 +2256,7 @@ static chd_error metadata_find_entry(chd_file *chd, uint32_t metatag, uint32_t m
 	while (metaentry->offset != 0)
 	{
 		uint8_t	raw_meta_header[METADATA_HEADER_SIZE];
-		uint32_t	count;
+		size_t	count;
 
 		/* read the raw header */
 		core_fseek(chd->file, metaentry->offset, SEEK_SET);

@@ -5317,8 +5317,8 @@ static void rgui_render(void *data, unsigned width, unsigned height,
                || ((rgui->flags & RGUI_FLAG_IS_QUICK_MENU) && menu_is_running_quick_menu())));
       unsigned thumbnail_panel_width = 0;
       unsigned term_mid_point        = 0;
-      size_t powerstate_len          = 0;
-      size_t timedate_len            = 0;
+      unsigned int powerstate_len    = 0;
+      unsigned int timedate_len      = 0;
 
       /* Cache mini thumbnail related parameters, if required */
       if (show_mini_thumbnails)
@@ -5368,7 +5368,7 @@ static void rgui_render(void *data, unsigned width, unsigned height,
 
          if (powerstate.battery_enabled)
          {
-            powerstate_len = utf8len(percent_str);
+            powerstate_len = (unsigned int) utf8len(percent_str);
 
             if (powerstate_len > 0)
             {
@@ -5432,7 +5432,7 @@ static void rgui_render(void *data, unsigned width, unsigned height,
          datetime.date_separator = settings->uints.menu_timedate_date_separator;
 
          menu_display_timedate(&datetime, timedate, sizeof(timedate));
-         timedate_len = utf8len(timedate);
+         timedate_len = (unsigned int) utf8len(timedate);
 
          /* Add battery spacer */
          if (powerstate_len)

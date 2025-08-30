@@ -60,7 +60,7 @@ static int rmsgpack_dom_reader_state_push(
          s->stack = realloc(s->stack, s->capacity * sizeof(struct rmsgpack_dom_value *));
          if(!s->stack)
          {
-            printf("[RMSGPACK_DOM] failed to reallocate stack to %ld\n",
+            printf("[RMSGPACK_DOM] failed to reallocate stack to %zu\n",
                   s->capacity*sizeof(struct rmsgpack_dom_value *));
             return -1;
          }

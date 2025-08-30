@@ -179,7 +179,7 @@ uint32_t flac_decoder_finish(flac_decoder* decoder)
 		position -= decoder->compressed_length;
 
 	flac_decoder_free(decoder);
-	return position;
+	return (uint32_t)position;
 }
 
 /*-------------------------------------------------
@@ -194,10 +194,10 @@ static size_t flac_decoder_read_callback(void *userdata, void *buffer, size_t by
 	uint8_t *dst = buffer;
 
 	/* copy from primary buffer first */
-	uint32_t outputpos = 0;
+	size_t outputpos = 0;
 	if (outputpos < bytes && decoder->compressed_offset < decoder->compressed_length)
 	{
-		uint32_t bytes_to_copy = MIN(bytes - outputpos, decoder->compressed_length - decoder->compressed_offset);
+		size_t bytes_to_copy = MIN(bytes - outputpos, decoder->compressed_length - decoder->compressed_offset);
 		memcpy(&dst[outputpos], decoder->compressed_start + decoder->compressed_offset, bytes_to_copy);
 		outputpos += bytes_to_copy;
 		decoder->compressed_offset += bytes_to_copy;
@@ -206,7 +206,7 @@ static size_t flac_decoder_read_callback(void *userdata, void *buffer, size_t by
 	/* once we're out of that, copy from the secondary buffer */
 	if (outputpos < bytes && decoder->compressed_offset < decoder->compressed_length + decoder->compressed2_length)
 	{
-		uint32_t bytes_to_copy = MIN(bytes - outputpos, decoder->compressed2_length - (decoder->compressed_offset - decoder->compressed_length));
+		size_t bytes_to_copy = MIN(bytes - outputpos, decoder->compressed2_length - (decoder->compressed_offset - decoder->compressed_length));
 		memcpy(&dst[outputpos], decoder->compressed2_start + decoder->compressed_offset - decoder->compressed_length, bytes_to_copy);
 		outputpos += bytes_to_copy;
 		decoder->compressed_offset += bytes_to_copy;
@@ -243,7 +243,8 @@ static void flac_decoder_metadata_callback(void *userdata, drflac_metadata *meta
 static void flac_decoder_write_callback(void *userdata, void *buffer, size_t bytes)
 {
 	int sampnum, chan;
-	int shift, blocksize;
+   int shift;
+   size_t blocksize;
 	flac_decoder * decoder = (flac_decoder *)userdata;
 	int16_t *sampbuf = (int16_t *)buffer;
 	int sampch = channels(decoder);

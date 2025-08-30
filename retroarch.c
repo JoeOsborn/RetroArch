@@ -1229,7 +1229,7 @@ static size_t find_driver_nonempty(
 
 int driver_find_index(const char *label, const char *drv)
 {
-   size_t i;
+   unsigned int i;
    char str[NAME_MAX_LENGTH];
 
    str[0] = '\0';
@@ -1256,7 +1256,7 @@ int driver_find_index(const char *label, const char *drv)
  **/
 static void driver_find_last(const char *label, char *s, size_t len)
 {
-   size_t i;
+   unsigned int i;
    for (i = 0;
          find_driver_nonempty(label, i, s, len) > 0; i++) { }
    if (i)
@@ -5224,7 +5224,7 @@ bool command_event(enum event_command cmd, void *data)
          break;
       case CMD_EVENT_RUMBLE_STOP:
          {
-            size_t i;
+            unsigned int i;
             for (i = 0; i < MAX_USERS; i++)
             {
                unsigned joy_idx = settings->uints.input_joypad_index[i];

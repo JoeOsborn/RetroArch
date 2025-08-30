@@ -276,7 +276,7 @@ enum huffman_error huffman_import_tree_huffman(struct huffman_decoder* decoder, 
 	/* determine the maximum length of an RLE count */
 	temp = decoder->numcodes - 9;
 	while (temp != 0)
-		temp >>= 1, rlefullbits++;
+      (void)(temp >>= 1), rlefullbits++;
 
 	/* now process the rest of the data */
 	for (curcode = 0; curcode < decoder->numcodes; )
@@ -400,7 +400,7 @@ int huffman_build_tree(struct huffman_decoder* decoder, uint32_t totaldata, uint
 			decoder->huffnode[curcode].bits = curcode;
 
 			/* scale the weight by the current effective length, ensuring we don't go to 0 */
-			decoder->huffnode[curcode].weight = ((uint64_t)decoder->datahisto[curcode]) * ((uint64_t)totalweight) / ((uint64_t)totaldata);
+			decoder->huffnode[curcode].weight = (uint32_t)(((uint64_t)decoder->datahisto[curcode]) * ((uint64_t)totalweight) / ((uint64_t)totaldata));
 			if (decoder->huffnode[curcode].weight == 0)
 				decoder->huffnode[curcode].weight = 1;
 		}
